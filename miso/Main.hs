@@ -67,7 +67,7 @@ updateApp (UpdateNotes notes) _ = noEff notes
 
 appView :: Model -> View AppEvent
 appView model =
-  div_ []
+  div_ [ class_ "container" ]
     [ ul_ [ class_ "list-group" ] $ map noteView model ]
 
 noteView :: Note -> View AppEvent
