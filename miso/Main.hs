@@ -12,8 +12,9 @@ import Data.ByteString.UTF8 (toString)
 import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View)
 import Miso.Types (LogLevel(Off))
 import Miso.String (ms)
-import Miso.Html (h1_, text, div_, ul_, li_)
-import Miso.Html.Property (class_)
+import Miso.Html (h1_, text, p_, div_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
+import Miso.Html.Event (onClick, onSubmit, onChange)
+import Miso.Html.Property (id_, class_, type_, value_, textProp)
 import Miso.Effect (Effect, noEff, (<#))
 import JavaScript.Web.XMLHttpRequest (xhrByteString, Response(..), Request(..), Method(..), RequestData(..))
 
@@ -29,7 +30,7 @@ misoApp = App { model = initialModel
               , subs = []
               , events = defaultEvents
               , initialAction = CheckForNotes
-              , mountPoint = Nothing
+              , mountPoint = Just "App"
               , logLevel = Off
               }
 
@@ -64,21 +65,46 @@ updateApp CheckForNotes model = model <# do
 updateApp NoOp model = noEff model
 updateApp (UpdateNotes notes) _ = noEff notes
 
-
 appView :: Model -> View AppEvent
 appView model =
   div_ [ class_ "container" ]
-    [ ul_ [ class_ "list-group" ] $ map noteView model ]
+    [ ul_ [ class_ "list-group" ] $ map noteView model ++ [ hr_ [], noteEditView ] ]
 
 noteView :: Note -> View AppEvent
 noteView note = 
-  li_ [ class_ "list-group-item" ]
+  li_ [ class_ "list-group-item row" ]
     [ h1_ [ class_ "h4" ] [ text _noteTitle ]
-    , div_ [] [ text _noteContent ]
+    , p_ [] [ text _noteContent ]
+    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
+    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
     ]
   where
     _noteContent = (ms . content . noteContent) note
     _noteTitle = (ms . fromMaybe "ERROR" . title . noteContent) note
+
+noteEditView :: View AppEvent
+noteEditView =
+  div_ [ class_ "row justify-content-center", onClick NoOp ]
+    [ form_ [ onSubmit NoOp ] 
+        [ legend_ [] [ text "Création d'une note :" ]
+        , titleInputView
+        , contentInputView
+        , button_ [ type_ "submit", class_ "btn btn-primary" ] [ text "Submit" ]]
+    ]
+
+titleInputView :: View AppEvent
+titleInputView =
+  div_ [ class_ "mb-3"]
+    [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Titre" ]
+    , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (const NoOp), value_ ""]
+    ]
+
+contentInputView :: View AppEvent
+contentInputView =
+  div_ [ class_ "mb-3"]
+    [ label_ [ textProp "htmlFor" "inputContent", class_ "form-label" ] [ text "Contenu" ]
+    , textarea_ [ id_ "inputContent", class_ "form-control", onChange (const NoOp), value_ ""] []
+    ]
 
 data NoteContent = NoteContent { title :: Maybe String
                                , content :: String
