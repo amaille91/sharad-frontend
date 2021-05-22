@@ -37,7 +37,30 @@ misoApp = App { model = initialModel
               , logLevel = Off
               }
 
-data Model = Model { notes :: [Note], editing :: Bool, currentlyEditedNoteTitle :: Maybe String, currentlyEditedNoteBody :: Maybe String, errorStr :: Maybe String } deriving(Eq, Show)
+data Model = Model { notes :: [Note], noteEditionState :: NoteEditionState, errorStr :: Maybe String } deriving(Eq, Show)
+
+data NoteEditionState = NotEditing | EditingNewNote NoteContent | EditingExistingNote Note NoteContent deriving (Eq, Show)
+
+updateEditedNoteTitle :: NoteEditionState -> String -> NoteEditionState
+updateEditedNoteTitle NotEditing _                                              = NotEditing
+updateEditedNoteTitle (EditingNewNote editedContent) newTitle                   = EditingNewNote editedContent { title = stringToMaybe newTitle }
+updateEditedNoteTitle (EditingExistingNote originalNote editedContent) newTitle = EditingExistingNote originalNote editedContent { title = stringToMaybe  newTitle }
+
+updateEditedNoteBody :: NoteEditionState -> String -> NoteEditionState
+updateEditedNoteBody NotEditing _                                                = NotEditing
+updateEditedNoteBody (EditingNewNote editedContent) newContent                   = EditingNewNote editedContent { content = newContent }
+updateEditedNoteBody (EditingExistingNote originalNote editedContent) newContent = EditingExistingNote originalNote editedContent { content = newContent }
+
+editedNoteTitle :: NoteEditionState -> Maybe String
+editedNoteTitle NotEditing = Nothing
+editedNoteTitle (EditingNewNote NoteContent { title = editedTitle, content = _})        = editedTitle
+editedNoteTitle (EditingExistingNote _ NoteContent { title = editedTitle, content = _}) = editedTitle
+
+editedNoteBody :: NoteEditionState -> Maybe String
+editedNoteBody NotEditing = Nothing
+editedNoteBody (EditingNewNote NoteContent { title = _, content = editedContent})       = Just editedContent
+editedNoteBody (EditingExistingNote _ NoteContent { title = _, content = editedContent}) = Just editedContent
+
 data AppEvent = 
     NoOp
   | CheckForNotes
@@ -47,41 +70,47 @@ data AppEvent =
   | CreateNewNoteFromEditedNote
   | CreateNoteClicked
   | NoteCreated Note
-  | DeleteNote String
+  | DeleteNoteClicked String
   | NoteDeleted String
   | ErrorHappened MisoString
-  | NoteEdited
+  | NoteEditionFinidhed NoteEditionState
+  | EditNoteClicked Note
 
 initialModel :: Model
-initialModel = Model { notes = [], editing = False, currentlyEditedNoteTitle = Nothing, currentlyEditedNoteBody = Nothing, errorStr = Nothing }
+initialModel = Model { notes = [], noteEditionState = NotEditing, errorStr = Nothing }
 
 updateApp :: AppEvent -> Model -> Effect AppEvent Model
-updateApp CheckForNotes model                                  = model <# do callAndHandleBody getNotesRequest (return . UpdateNotes)
+updateApp CheckForNotes model                                  = model <# handleCheckForNotes
+updateApp (EditNoteClicked note) model                         = noEff $ model { noteEditionState = EditingExistingNote note (noteContent note) }
 updateApp NoOp model                                           = noEff model
 updateApp (UpdateNotes notes) model                            = noEff model { notes = notes }
-updateApp (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ model { currentlyEditedNoteTitle = if "" == newTitle then Nothing else Just newTitle }
-updateApp (UpdateCurrentlyEditedNoteBody newNoteContent) model = noEff $ model { currentlyEditedNoteBody = if "" == newNoteContent then Nothing else Just newNoteContent }
-updateApp CreateNewNoteFromEditedNote model                    = model <# callPostNote model
-updateApp NoteEdited model                                     = model <# callPostNote model
-updateApp CreateNoteClicked model                              = noEff $ model { editing = True }
-updateApp (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], currentlyEditedNoteTitle = Nothing, currentlyEditedNoteBody = Nothing }
+updateApp (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ model { noteEditionState = updateEditedNoteTitle (noteEditionState model) newTitle }
+updateApp (UpdateCurrentlyEditedNoteBody newBody) model        = noEff $ model { noteEditionState = updateEditedNoteBody (noteEditionState model) newBody }
+updateApp (NoteEditionFinidhed finalEditionState) model        = handleNoteEditionFinished finalEditionState model
+updateApp CreateNoteClicked model                              = noEff $ model { noteEditionState = EditingNewNote emptyNoteContent }
+updateApp (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], noteEditionState = NotEditing }
 updateApp (NoteDeleted noteId) model                           = noEff $ model { notes = filter ((/= noteId) . id . storageId) $ notes model }
-updateApp (DeleteNote noteId) model                            = model <# do
+updateApp (DeleteNoteClicked noteId) model                            = model <# do
   response <- xhrByteString $ deleteNoteRequest noteId
   if status response /= 200
     then return (ErrorHappened "Server answer != 200 OK")
     else return (NoteDeleted noteId)
-                                    
-callPostNote :: Model -> IO AppEvent
-callPostNote model = fmap postNoteFromNoteContent (mkUpdateNoteContent model) `orElse` return (ErrorHappened "Cannot create note with empty body")
-  where
-    handleCreationResponse :: NoteContent -> StorageId -> IO AppEvent
-    handleCreationResponse updatedContent storeId = return $ NoteCreated Note { storageId = storeId, noteContent = updatedContent }
-    postNoteFromNoteContent :: NoteContent -> IO AppEvent
-    postNoteFromNoteContent contentToPost = callAndHandleBody (postNoteRequest contentToPost) (handleCreationResponse contentToPost)
 
-mkUpdateNoteContent :: Model -> Maybe NoteContent
-mkUpdateNoteContent model = fmap (\editedBody -> NoteContent { title = currentlyEditedNoteTitle model, content = editedBody }) (currentlyEditedNoteBody model)
+handleNoteEditionFinished :: NoteEditionState -> Model -> Effect AppEvent Model
+handleNoteEditionFinished NotEditing model = model <# return (ErrorHappened "Couldn't be possible to receive NoteEditionFinished event while not editing a note")
+handleNoteEditionFinished (EditingNewNote newNoteContent) model = model { noteEditionState = NotEditing } <# callPostNote newNoteContent
+handleNoteEditionFinished (EditingExistingNote originalNote newNoteContent) model = model { noteEditionState = NotEditing } <# do
+  return (ErrorHappened "NotImplemented")
+
+handleCheckForNotes :: IO AppEvent
+handleCheckForNotes = do
+  retrievedNotes <- callAndRetrieveBody getNotesRequest
+  return $ fmap UpdateNotes retrievedNotes `orElse` (ErrorHappened "No Body in GET /note response")
+
+callPostNote :: NoteContent -> IO AppEvent
+callPostNote newContent = do
+  maybeStoreId <- callAndRetrieveBody (postNoteRequest newContent)
+  return $ fmap (\storeId -> NoteCreated Note { storageId = storeId, noteContent = newContent }) maybeStoreId `orElse` (ErrorHappened "No Body in POST /note response")
 
 getNotesRequest :: Request
 getNotesRequest = Request { reqMethod = GET
@@ -110,13 +139,12 @@ postNoteRequest noteContent = Request { reqMethod = POST
                                       , reqData = asRequestBody noteContent
                                       }
 
-callAndHandleBody :: FromJSON a => Request -> (a -> IO AppEvent) -> IO AppEvent
-callAndHandleBody req handleResponse = do
-  maybeResponseByteString <- fmap contents $ xhrByteString req
-  fmap (handleRawResponse handleResponse) maybeResponseByteString `orElse` return (ErrorHappened "No body in response while expecting one")
-
-handleRawResponse :: FromJSON fromJson => (fromJson -> IO AppEvent) -> ByteString -> IO AppEvent
-handleRawResponse handleResponse rawResponse = fmap handleResponse (decode rawResponse) `orElse` return (ErrorHappened "Unable to parse response")
+callAndRetrieveBody :: FromJSON a => Request -> IO (Maybe a)
+callAndRetrieveBody req = do 
+  maybeBS <- fmap contents $ xhrByteString req
+  case maybeBS of
+    Nothing -> return Nothing
+    Just bs -> return $ decode bs
 
 decode :: FromJSON fromJson => ByteString -> Maybe fromJson
 decode = Aeson.decode . fromStrict
@@ -142,8 +170,8 @@ noteView note =
   li_ [ class_ "list-group-item row" ]
     [ h1_ [ class_ "h4" ] [ text _noteTitle ]
     , p_ [] [ text _noteContent ]
-    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash", onClick $ DeleteNote $ (id . storageId) note ] [] ]
-    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
+    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash", onClick $ DeleteNoteClicked $ (id . storageId) note ] [] ]
+    , button_ [ onClick NoOp, class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen", onClick (EditNoteClicked note), textProp "data-toggle" "modal", textProp "data-target" "#editing-modal" ] [] ]
     ]
   where
     _noteContent = (ms . content . noteContent) note
@@ -158,17 +186,18 @@ modalNoteEditView model =
                 [ div_ [ class_ "modal-title" ] [ text "Création d'une note" ] ]
             , div_ [ class_ "modal-body container-fluid" ] 
                 [ form_ [ class_ "row justify-content-center" ] 
-                  [ titleInputView $ ms $ fromMaybe "" (currentlyEditedNoteTitle model)
-                  , contentInputView $ ms $ fromMaybe "" (currentlyEditedNoteBody model)
+                  [ titleInputView $ ms $ fromMaybe "" (editedNoteTitle (noteEditionState model))
+                  , contentInputView $ ms $ fromMaybe "" (editedNoteBody (noteEditionState model))
                   ]
                 ]
             , div_ [ class_ "modal-footer" ]
                 [ button_ [ class_ "btn btn-secondary", textProp "data-dismiss" "modal" ] [ text "Cancel" ]
-                , button_ [ class_ "btn btn-primary", onClick NoteEdited, textProp "data-dismiss" "modal" ] [ text "Submit" ]
+                , button_ [ class_ "btn btn-primary", onClick (NoteEditionFinidhed finalEditionState), textProp "data-dismiss" "modal" ] [ text "Submit" ]
                 ]
             ]
         ]
     ]
+  where finalEditionState = noteEditionState model
 
 titleInputView :: MisoString -> View AppEvent
 titleInputView titleValue =
@@ -187,6 +216,9 @@ contentInputView contentValue =
 data NoteContent = NoteContent { title :: Maybe String
                                , content :: String
                                } deriving(Show, Generic, Eq)
+
+emptyNoteContent :: NoteContent
+emptyNoteContent = NoteContent { title = Nothing, content = "" }
 
 instance FromJSON NoteContent
 instance ToJSON NoteContent
@@ -210,3 +242,6 @@ data NoteUpdate = NoteUpdate { targetId :: StorageId
                              } deriving (Show, Generic)
 
 instance FromJSON NoteUpdate
+
+stringToMaybe :: String -> Maybe String
+stringToMaybe s = if s == "" then Nothing else Just s
