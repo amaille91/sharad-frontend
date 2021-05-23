@@ -14,7 +14,7 @@ import Data.ByteString.UTF8 (toString)
 import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View)
 import Miso.Types (LogLevel(Off))
 import Miso.String (ms, fromMisoString, MisoString)
-import Miso.Html (h1_, text, p_, main_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
+import Miso.Html (Attribute, h1_, text, p_, main_, span_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
 import Miso.Html.Event (onClick, onSubmit, onChange)
 import Miso.Html.Property (id_, class_, type_, value_, textProp, intProp)
 import Miso.Effect (Effect, noEff, (<#))
@@ -72,7 +72,7 @@ data AppEvent =
   | NoteCreated Note
   | DeleteNoteClicked String
   | NoteDeleted String
-  | ErrorHappened MisoString
+  | ErrorHappened String
   | NoteEditionFinidhed NoteEditionState
   | EditNoteClicked Note
 
@@ -90,7 +90,8 @@ updateApp (NoteEditionFinidhed finalEditionState) model        = handleNoteEditi
 updateApp CreateNoteClicked model                              = noEff $ model { noteEditionState = EditingNewNote emptyNoteContent }
 updateApp (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], noteEditionState = NotEditing }
 updateApp (NoteDeleted noteId) model                           = noEff $ model { notes = filter ((/= noteId) . id . storageId) $ notes model }
-updateApp (DeleteNoteClicked noteId) model                            = model <# do
+updateApp (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
+updateApp (DeleteNoteClicked noteId) model                     = model <# do
   response <- xhrByteString $ deleteNoteRequest noteId
   if status response /= 200
     then return (ErrorHappened "Server answer != 200 OK")
@@ -158,12 +159,37 @@ asRequestBody = StringData . ms . toString . toStrict . encode
 appView :: Model -> View AppEvent
 appView model =
   main_ [ id_ "App", class_ "container" ]
-    [ modalNoteEditView model
-    , nav_ [ class_ "d-flex py-2" ] [ button_ [ class_ "btn btn-primary", onClick CreateNoteClicked, textProp "data-toggle" "modal", textProp "data-target" "#editing-modal", textProp "data-backdrop" "static", textProp "data-keyboard" "true" ] [ text "Create note" ] ]
-    , ul_ [ class_ "list-group" ] $ map noteView (notes model) 
-    , hr_ []
-    --, noteEditView model
+    ([ modalNoteEditView model ] ++ listViewFromMaybe errorView (errorStr model) ++ [ hr_ []
+                                                                                    , navigationMenuView (errorStr model)
+                                                                                    , ul_ [ class_ "list-group" ] $ map noteView (notes model) 
+                                                                                    , hr_ []
+                                                                                    ])
+
+navigationMenuView :: Maybe String -> View AppEvent
+navigationMenuView errorStr =
+  nav_ [ class_ "container py-2" ] 
+    [ div_ [ class_ "row justify-content-end" ] [ openNoteCreationModalButton ] ]
+
+listViewFromMaybe :: (a -> View AppEvent) -> Maybe a -> [View AppEvent]
+listViewFromMaybe toView maybeA = fmap (\a -> [ toView a ]) maybeA `orElse` []
+
+errorView :: String -> View AppEvent
+errorView errorStr =
+  div_ [ class_ "container py-2" ]
+    [ div_ [ class_ "row justify-content-center" ] 
+        [ div_ [ class_ "alert alert-danger mb-0", role_ "role" ] [ text (ms errorStr) ] ]
     ]
+  
+role_ :: MisoString -> Attribute AppEvent
+role_ role = textProp "role" role
+
+openNoteCreationModalButton :: View AppEvent
+openNoteCreationModalButton = 
+  button_ ([ class_ "btn btn-primary", onClick CreateNoteClicked ] ++ openEditionModalBootstrapProperties) [ text "Create note" ]
+
+openEditionModalBootstrapProperties :: [Attribute AppEvent]
+openEditionModalBootstrapProperties =
+  [ textProp "data-toggle" "modal", textProp "data-target" "#editing-modal", textProp "data-backdrop" "static", textProp "data-keyboard" "true" ]
 
 noteView :: Note -> View AppEvent
 noteView note = 
