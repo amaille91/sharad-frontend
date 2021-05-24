@@ -22,6 +22,7 @@ library
     buildable: False
 
   exposed-modules: SharadFrontend
+  other-modules: SharadFrontend.Modal
   hs-source-dirs: ./src/
   build-depends:       
     base >=4.12 && <4.13,
@@ -29,7 +30,8 @@ library
     miso,
     bytestring,
     utf8-string,
-    aeson
+    aeson,
+    containers
   default-language:    Haskell2010
 
 executable sharad-frontend
