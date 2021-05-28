@@ -1,26 +1,41 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SharadFrontend.Modal (Event(..), FromModalEvent, fromModalEvent, view) where
+module SharadFrontend.Modal (Event(..), State(..), view, update) where
 
-import Miso (View)
-import Miso.String (MisoString)
+import Miso (View, Effect, now, noEff, consoleLog, style_, (<#))
+import Miso.String (MisoString, ms)
 import Miso.Html (div_, text)
-import Miso.Html.Property (id_, class_, intProp)
-import Miso.Html.Event (on)
-import Miso.Event.Decoder (emptyDecoder)
+import Miso.Html.Property (class_, intProp)
+import Miso.Util ((=:))
 
 data Event =
     ShowingTriggered
   | Shown
-  | DismissTriggered
   | Dismissed
+  | TimedAction Double Double (IO Event)
 
-class FromModalEvent a where
-  fromModalEvent :: Event -> a
+data State = Hidden | Transitioning | Visible deriving(Eq, Show)
 
-view :: (FromModalEvent a) => MisoString -> [ View a ] -> [ View a ] -> View a
-view modalTitle bodyContent footerContent =
-  div_ [ id_ "arbitrary-modal-id", class_ "arbitrary-modal arbitrary-fade arbitrary-show", intProp "tabindex" (-1), on "transitionend" emptyDecoder (const $ fromModalEvent Shown) ]
+update :: Event -> State -> Effect Event State
+update ShowingTriggered                         state = Transitioning <# do
+                                                          currentTime <- now
+                                                          return $ TimedAction currentTime displayDelay (consoleLog "Going to ModalShown" >> return Shown)
+update Shown                                    state = noEff Visible
+update Dismissed                                state = noEff Hidden
+update (TimedAction startTime delay thenAction) state = state <# do
+                                                          currentTime <- now
+                                                          if currentTime - startTime > delay
+                                                            then thenAction
+                                                            else do
+                                                              consoleLog . ms $ "looping cause currentDelay is " ++ (show (currentTime - startTime)) ++ ". Expected delay is " ++ (show delay)
+                                                              return $ TimedAction startTime delay thenAction
+
+displayDelay :: Double
+displayDelay = 100
+
+view :: MisoString -> [ View a ] -> [ View a ] -> State -> View a
+view modalTitle bodyContent footerContent state =
+  div_ ([ class_ "arbitrary-modal arbitrary-fade ", intProp "tabindex" (-1) ] ++ visibilityProperties)
     [ div_ [ class_ "arbitrary-modal-dialog" ]
         [ div_ [ class_ "arbitrary-modal-content" ] 
             [ div_ [ class_ "arbitrary-modal-header justify-content-center" ]
@@ -30,6 +45,11 @@ view modalTitle bodyContent footerContent =
             ]
         ]
     ]
+  where 
+    visibilityProperties = case state of
+      Hidden        -> []
+      Transitioning -> [ style_ ("display" =: "block") ]
+      Visible       -> [ class_ "arbitrary-show" ]
 
 -- bodyContent = [ form_ [ class_ "row justify-content-center" ] 
 --                   [ titleInputView $ ms $ fromMaybe "" (editedNoteTitle (noteEditionState model))

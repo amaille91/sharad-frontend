@@ -33,16 +33,20 @@ nav.d-flex {
     outline: 0;
 }
 
+.arbitrary-modal:not(.arbitrary-show) {
+  display: none;
+}
+
 .arbitrary-fade {
   transition: opacity .15s linear;
-  transition-property: opacity;
-  transition-duration: 0.15s;
-  transition-timing-function: linear;
-  transition-delay: 0s;
 }
 
 .arbitrary-fade:not(.arbitrary-show) {
   opacity: 0;
+}
+
+.arbitrary-modal.arbitrary-showing {
+  display: block;
 }
 
 .arbitrary-modal.arbitrary-fade .arbitrary-modal-dialog {
