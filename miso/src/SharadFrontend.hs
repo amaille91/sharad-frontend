@@ -7,6 +7,7 @@ module SharadFrontend (runSharadFrontend) where
 import Prelude hiding (id)
 import GHC.Generics (Generic)
 import Data.Maybe (fromMaybe, fromJust)
+import Data.String (lines)
 import Data.ByteString.Internal (ByteString)
 import Data.ByteString.Lazy (fromStrict, toStrict)
 import Data.ByteString.UTF8 (toString)
@@ -238,14 +239,20 @@ openNoteCreationModalButton =
 noteView :: Note -> View AppEvent
 noteView note = 
   li_ [ class_ "list-group-item row" ]
-    [ h1_ [ class_ "h4" ] [ text _noteTitle ]
-    , p_ [] [ text _noteContent ]
-    , button_ [ onClick (SharadEvent . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
-    , button_ [ onClick (SharadEvent $ EditNoteClicked note), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
-    ]
+    (  [ h1_ [ class_ "h4" ] [ text _noteTitle ] ]
+    ++ noteContentView _noteContent
+    ++ [ div_ [ class_ "text-center" ]
+           [ button_ [ onClick (SharadEvent . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
+           , button_ [ onClick (SharadEvent $ EditNoteClicked note), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
+           ]
+        ]
+    )
   where
-    _noteContent = (ms . content . noteContent) note
+    _noteContent = content (noteContent note)
     _noteTitle = (ms . fromMaybe "" . title . noteContent) note
+
+noteContentView :: String -> [View a]
+noteContentView noteContentStr = map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr)
 
 modalNoteEditView :: Model -> View AppEvent
 modalNoteEditView model =

@@ -10,7 +10,6 @@ html, body, main {
 }
   
 #App {
-  text-align: center;
   height: max-content;
   background-color: white;
   max-width: 640px;
