@@ -13,9 +13,10 @@ import Data.ByteString.UTF8 (toString)
 import Data.Map.Strict (singleton)
 import Data.Bifunctor (bimap)
 import qualified Data.Bifunctor as Bifunctor (first)
+import Control.Monad.State.Strict (StateT, mapStateT)
 
 import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View, getElementById, addEventListener)
-import Miso.Types (LogLevel(Off))
+import Miso.Types (LogLevel(Off), toTransition, fromTransition)
 import Miso.String (ms, fromMisoString, MisoString)
 import Miso.Html (Attribute, h1_, text, p_, main_, span_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
 import Miso.Html.Event (onClick, onSubmit, onChange)
@@ -54,7 +55,7 @@ updateEditedNoteTitle (EditingExistingNote originalNote editedContent) newTitle 
 updateEditedNoteBody :: NoteEditionState -> String -> NoteEditionState
 updateEditedNoteBody (EditingNewNote editedContent) newContent                   = EditingNewNote editedContent { content = newContent }
 updateEditedNoteBody (EditingExistingNote originalNote editedContent) newContent = EditingExistingNote originalNote editedContent { content = newContent }
-updateEditedNoteBody a _                                                = a
+updateEditedNoteBody a _                                                         = a
 
 editedNoteTitle :: NoteEditionState -> Maybe String
 editedNoteTitle (EditingNewNote NoteContent { title = editedTitle, content = _})        = editedTitle
@@ -62,7 +63,7 @@ editedNoteTitle (EditingExistingNote _ NoteContent { title = editedTitle, conten
 editedNoteTitle _ = Nothing
 
 editedNoteBody :: NoteEditionState -> Maybe String
-editedNoteBody (EditingNewNote NoteContent { title = _, content = editedContent})       = Just editedContent
+editedNoteBody (EditingNewNote NoteContent { title = _, content = editedContent})        = Just editedContent
 editedNoteBody (EditingExistingNote _ NoteContent { title = _, content = editedContent}) = Just editedContent
 editedNoteBody _ = Nothing
 
@@ -82,6 +83,7 @@ data SharadEventInstance = CheckForNotes
                          | NoteEditionFinidhed NoteEditionState
                          | NoteEditionAborted
                          | EditNoteClicked Note
+                         | NoteChanged Note
 
 initialModel :: Model
 initialModel = Model { notes = [], noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden, errorStr = Nothing }
@@ -96,12 +98,13 @@ updateModal event model = bimap fromModalEvent (updateModalState model) $ Modal.
 updateSharad :: SharadEventInstance -> Model -> Effect AppEvent Model
 updateSharad NoteEditionAborted model                             = noEff model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden }
 updateSharad (NoteEditionFinidhed finalEditionState) model        = Bifunctor.first fromSharadEvent $ handleNoteEditionFinished finalEditionState model
+updateSharad (NoteChanged newNote) model                   = noEff model { notes = changeNote (notes model) newNote }
 updateSharad CheckForNotes model                                  = Bifunctor.first fromSharadEvent $ model <# handleCheckForNotes
-updateSharad (EditNoteClicked note) model                         = noEff $ model { noteEditionState = EditingExistingNote note (noteContent note) }
+updateSharad (EditNoteClicked note) model                         = fromTransition (modifyState (\m -> m { noteEditionState = EditingExistingNote note (noteContent note) }) $ toTransition (updateModal Modal.ShowingTriggered)) model
 updateSharad (UpdateNotes notes) model                            = noEff model { notes = notes }
 updateSharad (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ model { noteEditionState = updateEditedNoteTitle (noteEditionState model) newTitle }
 updateSharad (UpdateCurrentlyEditedNoteBody newBody) model        = noEff $ model { noteEditionState = updateEditedNoteBody (noteEditionState model) newBody }
-updateSharad CreateNoteClicked model                              = updateModal Modal.ShowingTriggered model
+updateSharad CreateNoteClicked model                              = fromTransition (modifyState (\m -> m { noteEditionState = EditingNewNote emptyNoteContent }) $ toTransition (updateModal Modal.ShowingTriggered)) model
 updateSharad (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], noteEditionState = NotEditing }
 updateSharad (NoteDeleted noteId) model                           = noEff $ model { notes = filter ((/= noteId) . id . storageId) $ notes model }
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
@@ -110,6 +113,15 @@ updateSharad (DeleteNoteClicked noteId) model                     = model <# do
   if status response /= 200
     then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
     else return $ SharadEvent (NoteDeleted noteId)
+
+modifyState :: (Monad m) => (s -> s) -> StateT s m a -> StateT s m a
+modifyState f = mapStateT (\initialAction -> initialAction >>= (\(a, s) -> return (a, f s)))
+
+changeNote :: [Note] -> Note -> [Note]
+changeNote (n:otherNotes) newNote = 
+  if (id .storageId) n == (id .storageId) newNote 
+    then newNote : otherNotes
+    else n       : changeNote otherNotes newNote
 
 updateModalState :: Model -> Modal.State -> Model
 updateModalState model newModalState = model { noteEditionModalState = newModalState }
@@ -124,7 +136,11 @@ handleNoteEditionFinished :: NoteEditionState -> Model -> Effect SharadEventInst
 handleNoteEditionFinished NotEditing model = model <# return (ErrorHappened "Couldn't be possible to receive NoteEditionFinished event while not editing a note")
 handleNoteEditionFinished (EditingNewNote newNoteContent) model = model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden } <# callPostNote newNoteContent
 handleNoteEditionFinished (EditingExistingNote originalNote newNoteContent) model = model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden } <# do
-  return (ErrorHappened "NotImplemented")
+  newStorageId <- callAndRetrieveBody $ putNoteRequest NoteUpdate { targetId = storageId originalNote, newContent = newNoteContent }
+  case newStorageId of
+    Just newStorageId -> return $ NoteChanged Note { storageId = newStorageId, noteContent = newNoteContent }
+    Nothing           -> return (ErrorHappened "No Body in POST /note response")
+
 
 handleCheckForNotes :: IO SharadEventInstance
 handleCheckForNotes = do
@@ -162,6 +178,15 @@ postNoteRequest noteContent = Request { reqMethod = POST
                                       , reqWithCredentials = False
                                       , reqData = asRequestBody noteContent
                                       }
+
+putNoteRequest :: NoteUpdate -> Request
+putNoteRequest noteUpdate = Request { reqMethod = PUT
+                                     , reqURI = "/note"
+                                     , reqLogin = Nothing
+                                     , reqHeaders = []
+                                     , reqWithCredentials = False
+                                     , reqData = asRequestBody noteUpdate
+                                     }
 
 callAndRetrieveBody :: FromJSON a => Request -> IO (Maybe a)
 callAndRetrieveBody req = do 
@@ -279,6 +304,7 @@ data NoteUpdate = NoteUpdate { targetId :: StorageId
                              , newContent :: NoteContent
                              } deriving (Show, Generic)
 
+instance ToJSON NoteUpdate
 instance FromJSON NoteUpdate
 
 stringToMaybe :: String -> Maybe String

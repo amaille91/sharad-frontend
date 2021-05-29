@@ -31,7 +31,8 @@ library
     bytestring,
     utf8-string,
     aeson,
-    containers
+    containers,
+    mtl
   default-language:    Haskell2010
 
 executable sharad-frontend
