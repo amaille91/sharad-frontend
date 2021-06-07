@@ -6,18 +6,19 @@ module SharadFrontend (runSharadFrontend) where
 
 import Prelude hiding (id)
 import GHC.Generics (Generic)
+import Data.Function ((&))
+import Control.Arrow
 import Data.Maybe (fromMaybe, fromJust)
 import Data.String (lines)
 import Data.ByteString.Internal (ByteString)
 import Data.ByteString.Lazy (fromStrict, toStrict)
 import Data.ByteString.UTF8 (toString)
 import Data.Map.Strict (singleton)
-import Data.Bifunctor (bimap)
-import qualified Data.Bifunctor as Bifunctor (first)
+import qualified Data.Bifunctor as Bifunctor (first, second, bimap)
 import Control.Monad.State.Strict (StateT, mapStateT)
 
 import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View, getElementById, addEventListener)
-import Miso.Types (LogLevel(Off), toTransition, fromTransition)
+import Miso.Types (LogLevel(Off), Transition, toTransition, fromTransition, mapAction)
 import Miso.String (ms, fromMisoString, MisoString)
 import Miso.Html (Attribute, h1_, text, p_, main_, span_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
 import Miso.Html.Event (onClick, onSubmit, onChange)
@@ -90,22 +91,22 @@ initialModel :: Model
 initialModel = Model { notes = [], noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden, errorStr = Nothing }
 
 updateApp :: AppEvent -> Model -> Effect AppEvent Model
-updateApp (NoteModalEvent event) model = updateModal event model
+updateApp (NoteModalEvent event) model = Bifunctor.second (updateModalState model) $ updateModal event (noteEditionModalState model)
 updateApp (SharadEvent event)    model = updateSharad event model
 
-updateModal :: Modal.Event -> Model -> Effect AppEvent Model
-updateModal event model = bimap fromModalEvent (updateModalState model) $ Modal.update event (noteEditionModalState model)
+updateModal :: Modal.Event -> Modal.State -> Effect AppEvent Modal.State
+updateModal event state = Bifunctor.first fromModalEvent $ Modal.update event state
 
 updateSharad :: SharadEventInstance -> Model -> Effect AppEvent Model
 updateSharad NoteEditionAborted model                             = noEff model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden }
 updateSharad (NoteEditionFinidhed finalEditionState) model        = Bifunctor.first fromSharadEvent $ handleNoteEditionFinished finalEditionState model
 updateSharad (NoteChanged newNote) model                   = noEff model { notes = changeNote (notes model) newNote }
 updateSharad CheckForNotes model                                  = Bifunctor.first fromSharadEvent $ model <# handleCheckForNotes
-updateSharad (EditNoteClicked note) model                         = fromTransition (modifyState (\m -> m { noteEditionState = EditingExistingNote note (noteContent note) }) $ toTransition (updateModal Modal.ShowingTriggered)) model
+updateSharad (EditNoteClicked note) model                         = Modal.update Modal.ShowingTriggered (noteEditionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { noteEditionState = EditingExistingNote note (noteContent note), noteEditionModalState = m })
 updateSharad (UpdateNotes notes) model                            = noEff model { notes = notes }
 updateSharad (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ model { noteEditionState = updateEditedNoteTitle (noteEditionState model) newTitle }
 updateSharad (UpdateCurrentlyEditedNoteBody newBody) model        = noEff $ model { noteEditionState = updateEditedNoteBody (noteEditionState model) newBody }
-updateSharad CreateNoteClicked model                              = fromTransition (modifyState (\m -> m { noteEditionState = EditingNewNote emptyNoteContent }) $ toTransition (updateModal Modal.ShowingTriggered)) model
+updateSharad CreateNoteClicked model                              = (noteEditionModalState ^>> (Modal.update Modal.ShowingTriggered) >>^ Bifunctor.bimap fromModalEvent (toEditingNewNote . (updateModalState model))) model
 updateSharad (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], noteEditionState = NotEditing }
 updateSharad (NoteDeleted noteId) model                           = noEff $ model { notes = filter ((/= noteId) . id . storageId) $ notes model }
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
@@ -123,6 +124,9 @@ changeNote (n:otherNotes) newNote =
   if (id .storageId) n == (id .storageId) newNote 
     then newNote : otherNotes
     else n       : changeNote otherNotes newNote
+
+toEditingNewNote :: Model -> Model
+toEditingNewNote model = model { noteEditionState = EditingNewNote emptyNoteContent }
 
 updateModalState :: Model -> Modal.State -> Model
 updateModalState model newModalState = model { noteEditionModalState = newModalState }
@@ -208,7 +212,7 @@ asRequestBody = StringData . ms . toString . toStrict . encode
 appView :: Model -> View AppEvent
 appView model = 
   main_ [ id_ "App", class_ "container" ]
-    ([ modalNoteEditView model ] ++ listViewFromMaybe errorView (errorStr model) ++ [ hr_ []
+    (modalNoteEditView model ++ listViewFromMaybe errorView (errorStr model) ++ [ hr_ []
                                                                                     , navigationMenuView (errorStr model)
                                                                                     , ul_ [ class_ "list-group" ] $ map noteView (notes model) 
                                                                                     , hr_ []
@@ -254,7 +258,7 @@ noteView note =
 noteContentView :: String -> [View a]
 noteContentView noteContentStr = map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr)
 
-modalNoteEditView :: Model -> View AppEvent
+modalNoteEditView :: Model -> [View AppEvent]
 modalNoteEditView model =
   Modal.view "Création d'une note"
             [ form_ [ class_ "row justify-content-center" ] 

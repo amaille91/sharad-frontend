@@ -32,7 +32,8 @@ library
     utf8-string,
     aeson,
     containers,
-    mtl
+    mtl,
+    jsaddle
   default-language:    Haskell2010
 
 executable sharad-frontend

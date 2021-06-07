@@ -32,20 +32,39 @@ nav.d-flex {
     outline: 0;
 }
 
-.arbitrary-modal:not(.arbitrary-show) {
+.arbitrary-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1059;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  outline: 0;
+  background-color: black;
+}
+
+.arbitrary-modal:not(.arbitrary-show), .arbitrary-modal-overlay:not(.arbitrary-show) {
   display: none;
+  opacity: 0;
+}
+
+.arbitrary-modal-overlay.arbitrary-show {
+  opacity: .5;
 }
 
 .arbitrary-fade {
   transition: opacity .15s linear;
 }
 
-.arbitrary-fade:not(.arbitrary-show) {
-  opacity: 0;
+.arbitrary-fade-quick {
+  transition: opacity .05s linear;
 }
 
-.arbitrary-modal.arbitrary-showing {
-  display: block;
+.arbitrary-modal.arbitrary-show {
+  opacity: 1;
 }
 
 .arbitrary-modal.arbitrary-fade .arbitrary-modal-dialog {
