@@ -31,6 +31,8 @@ import qualified Data.Aeson as Aeson (decode)
 
 import qualified SharadFrontend.Modal as Modal
 
+import Model
+
 runSharadFrontend :: IO ()
 runSharadFrontend = startApp misoApp
 
@@ -157,9 +159,12 @@ callPostNote newContent = do
   maybeStoreId <- callAndRetrieveBody (postNoteRequest newContent)
   return $ fmap (\storeId -> NoteCreated Note { storageId = storeId, noteContent = newContent }) maybeStoreId `orElse` (ErrorHappened "No Body in POST /note response")
 
+notePath :: String
+notePath = "/haskell/note"
+
 getNotesRequest :: Request
 getNotesRequest = Request { reqMethod = GET
-                          , reqURI = "/note"
+                          , reqURI = ms notePath
                           , reqLogin = Nothing
                           , reqHeaders = []
                           , reqWithCredentials = False
@@ -168,7 +173,7 @@ getNotesRequest = Request { reqMethod = GET
 
 deleteNoteRequest :: String -> Request
 deleteNoteRequest noteId = Request { reqMethod = DELETE
-                                   , reqURI = ms $ "/note/" ++ noteId
+                                   , reqURI = ms $ notePath ++ "/" ++ noteId
                                    , reqLogin = Nothing
                                    , reqHeaders = []
                                    , reqWithCredentials = False
@@ -177,7 +182,7 @@ deleteNoteRequest noteId = Request { reqMethod = DELETE
 
 postNoteRequest :: NoteContent -> Request
 postNoteRequest noteContent = Request { reqMethod = POST
-                                      , reqURI = "/note"
+                                      , reqURI = ms notePath
                                       , reqLogin = Nothing
                                       , reqHeaders = []
                                       , reqWithCredentials = False
@@ -186,7 +191,7 @@ postNoteRequest noteContent = Request { reqMethod = POST
 
 putNoteRequest :: NoteUpdate -> Request
 putNoteRequest noteUpdate = Request { reqMethod = PUT
-                                     , reqURI = "/note"
+                                     , reqURI = ms notePath
                                      , reqLogin = Nothing
                                      , reqHeaders = []
                                      , reqWithCredentials = False
@@ -287,36 +292,8 @@ contentInputView contentValue =
     , textarea_ [ id_ "inputContent", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteBody . fromMisoString), value_ contentValue ] []
     ]
 
-data NoteContent = NoteContent { title :: Maybe String
-                               , content :: String
-                               } deriving(Show, Generic, Eq)
-
 emptyNoteContent :: NoteContent
 emptyNoteContent = NoteContent { title = Nothing, content = "" }
-
-instance FromJSON NoteContent
-instance ToJSON NoteContent
-
-data StorageId = StorageId { id :: String 
-                           , version :: String
-                           } deriving (Show, Generic, Eq)
-
-instance ToJSON StorageId
-instance FromJSON StorageId
-
-data Note = Note { storageId :: StorageId
-                 , noteContent :: NoteContent
-                 } deriving (Show, Generic, Eq)
-
-instance ToJSON Note
-instance FromJSON Note
-
-data NoteUpdate = NoteUpdate { targetId :: StorageId 
-                             , newContent :: NoteContent
-                             } deriving (Show, Generic)
-
-instance ToJSON NoteUpdate
-instance FromJSON NoteUpdate
 
 stringToMaybe :: String -> Maybe String
 stringToMaybe s = if s == "" then Nothing else Just s
