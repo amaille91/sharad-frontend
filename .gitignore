@@ -1,3 +1,4 @@
 dist-newstyle/
 ghcjs-base-0.2.0.0/
 build-deploy.sh
+*.swp

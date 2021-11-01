@@ -47,47 +47,47 @@ misoApp = App { model = initialModel
               , logLevel = Off
               }
 
-data Model = Model { notes :: [Note], noteEditionState :: NoteEditionState, noteEditionModalState :: Modal.State, errorStr :: Maybe String } deriving(Eq, Show)
+data Model = Model { notes :: [Identifiable NoteContent], noteEditionState :: NoteEditionState, noteEditionModalState :: Modal.State, errorStr :: Maybe String } deriving(Eq, Show)
 
-data NoteEditionState = NotEditing | EditingNewNote NoteContent | EditingExistingNote Note NoteContent deriving (Eq, Show)
+data NoteEditionState = NotEditing | EditingNewNote NoteContent | EditingExistingNote (Identifiable NoteContent) NoteContent deriving (Eq, Show)
 
 updateEditedNoteTitle :: NoteEditionState -> String -> NoteEditionState
 updateEditedNoteTitle NotEditing _                                              = NotEditing
 updateEditedNoteTitle (EditingNewNote editedContent) newTitle                   = EditingNewNote editedContent { title = stringToMaybe newTitle }
-updateEditedNoteTitle (EditingExistingNote originalNote editedContent) newTitle = EditingExistingNote originalNote editedContent { title = stringToMaybe  newTitle }
+updateEditedNoteTitle (EditingExistingNote originalNote editedContent) newTitle = EditingExistingNote originalNote editedContent { title = stringToMaybe newTitle }
 
 updateEditedNoteBody :: NoteEditionState -> String -> NoteEditionState
-updateEditedNoteBody (EditingNewNote editedContent) newContent                   = EditingNewNote editedContent { content = newContent }
-updateEditedNoteBody (EditingExistingNote originalNote editedContent) newContent = EditingExistingNote originalNote editedContent { content = newContent }
+updateEditedNoteBody (EditingNewNote editedContent) newContent                   = EditingNewNote editedContent { noteContent = newContent }
+updateEditedNoteBody (EditingExistingNote originalNote editedContent) newContent = EditingExistingNote originalNote editedContent { noteContent = newContent }
 updateEditedNoteBody a _                                                         = a
 
 editedNoteTitle :: NoteEditionState -> Maybe String
-editedNoteTitle (EditingNewNote NoteContent { title = editedTitle, content = _})        = editedTitle
-editedNoteTitle (EditingExistingNote _ NoteContent { title = editedTitle, content = _}) = editedTitle
+editedNoteTitle (EditingNewNote NoteContent { title = editedTitle, noteContent = _})        = editedTitle
+editedNoteTitle (EditingExistingNote _ NoteContent { title = editedTitle, noteContent = _}) = editedTitle
 editedNoteTitle _ = Nothing
 
 editedNoteBody :: NoteEditionState -> Maybe String
-editedNoteBody (EditingNewNote NoteContent { title = _, content = editedContent})        = Just editedContent
-editedNoteBody (EditingExistingNote _ NoteContent { title = _, content = editedContent}) = Just editedContent
+editedNoteBody (EditingNewNote NoteContent { title = _, noteContent = editedContent})        = Just editedContent
+editedNoteBody (EditingExistingNote _ NoteContent { title = _, noteContent = editedContent}) = Just editedContent
 editedNoteBody _ = Nothing
 
 data AppEvent =  NoteModalEvent Modal.Event
                | SharadEvent SharadEventInstance
           
 data SharadEventInstance = CheckForNotes
-                         | UpdateNotes [Note]
+                         | UpdateNotes [Identifiable NoteContent]
                          | UpdateCurrentlyEditedNoteTitle String
                          | UpdateCurrentlyEditedNoteBody String
                          | CreateNewNoteFromEditedNote
                          | CreateNoteClicked
-                         | NoteCreated Note
+                         | NoteCreated (Identifiable NoteContent)
                          | DeleteNoteClicked String
                          | NoteDeleted String
                          | ErrorHappened String
                          | NoteEditionFinidhed NoteEditionState
                          | NoteEditionAborted
-                         | EditNoteClicked Note
-                         | NoteChanged Note
+                         | EditNoteClicked (Identifiable NoteContent)
+                         | NoteChanged (Identifiable NoteContent)
 
 initialModel :: Model
 initialModel = Model { notes = [], noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden, errorStr = Nothing }
@@ -104,7 +104,7 @@ updateSharad NoteEditionAborted model                             = noEff model 
 updateSharad (NoteEditionFinidhed finalEditionState) model        = Bifunctor.first fromSharadEvent $ handleNoteEditionFinished finalEditionState model
 updateSharad (NoteChanged newNote) model                   = noEff model { notes = changeNote (notes model) newNote }
 updateSharad CheckForNotes model                                  = Bifunctor.first fromSharadEvent $ model <# handleCheckForNotes
-updateSharad (EditNoteClicked note) model                         = Modal.update Modal.ShowingTriggered (noteEditionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { noteEditionState = EditingExistingNote note (noteContent note), noteEditionModalState = m })
+updateSharad (EditNoteClicked note) model                         = Modal.update Modal.ShowingTriggered (noteEditionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { noteEditionState = EditingExistingNote note (content note), noteEditionModalState = m })
 updateSharad (UpdateNotes notes) model                            = noEff model { notes = notes }
 updateSharad (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ model { noteEditionState = updateEditedNoteTitle (noteEditionState model) newTitle }
 updateSharad (UpdateCurrentlyEditedNoteBody newBody) model        = noEff $ model { noteEditionState = updateEditedNoteBody (noteEditionState model) newBody }
@@ -121,7 +121,7 @@ updateSharad (DeleteNoteClicked noteId) model                     = model <# do
 modifyState :: (Monad m) => (s -> s) -> StateT s m a -> StateT s m a
 modifyState f = mapStateT (\initialAction -> initialAction >>= (\(a, s) -> return (a, f s)))
 
-changeNote :: [Note] -> Note -> [Note]
+changeNote :: [Identifiable NoteContent] -> Identifiable NoteContent -> [Identifiable NoteContent]
 changeNote (n:otherNotes) newNote = 
   if (id .storageId) n == (id .storageId) newNote 
     then newNote : otherNotes
@@ -143,9 +143,9 @@ handleNoteEditionFinished :: NoteEditionState -> Model -> Effect SharadEventInst
 handleNoteEditionFinished NotEditing model = model <# return (ErrorHappened "Couldn't be possible to receive NoteEditionFinished event while not editing a note")
 handleNoteEditionFinished (EditingNewNote newNoteContent) model = model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden } <# callPostNote newNoteContent
 handleNoteEditionFinished (EditingExistingNote originalNote newNoteContent) model = model { noteEditionState = NotEditing, noteEditionModalState = Modal.Hidden } <# do
-  newStorageId <- callAndRetrieveBody $ putNoteRequest NoteUpdate { targetId = storageId originalNote, newContent = newNoteContent }
+  newStorageId <- callAndRetrieveBody $ putNoteRequest Identifiable { storageId = storageId originalNote, content = newNoteContent }
   case newStorageId of
-    Just newStorageId -> return $ NoteChanged Note { storageId = newStorageId, noteContent = newNoteContent }
+    Just newStorageId -> return $ NoteChanged Identifiable { storageId = newStorageId, content = newNoteContent }
     Nothing           -> return (ErrorHappened "No Body in POST /note response")
 
 
@@ -157,7 +157,7 @@ handleCheckForNotes = do
 callPostNote :: NoteContent -> IO SharadEventInstance
 callPostNote newContent = do
   maybeStoreId <- callAndRetrieveBody (postNoteRequest newContent)
-  return $ fmap (\storeId -> NoteCreated Note { storageId = storeId, noteContent = newContent }) maybeStoreId `orElse` (ErrorHappened "No Body in POST /note response")
+  return $ fmap (\storeId -> NoteCreated Identifiable { storageId = storeId, content = newContent }) maybeStoreId `orElse` (ErrorHappened "No Body in POST /note response")
 
 notePath :: String
 notePath = "/haskell/note"
@@ -189,7 +189,7 @@ postNoteRequest noteContent = Request { reqMethod = POST
                                       , reqData = asRequestBody noteContent
                                       }
 
-putNoteRequest :: NoteUpdate -> Request
+putNoteRequest :: Identifiable NoteContent -> Request
 putNoteRequest noteUpdate = Request { reqMethod = PUT
                                      , reqURI = ms notePath
                                      , reqLogin = Nothing
@@ -245,7 +245,7 @@ openNoteCreationModalButton :: View AppEvent
 openNoteCreationModalButton = 
   button_ ([ class_ "btn btn-primary", onClick (SharadEvent CreateNoteClicked) ]) [ text "Create note" ]
 
-noteView :: Note -> View AppEvent
+noteView :: Identifiable NoteContent -> View AppEvent
 noteView note = 
   li_ [ class_ "list-group-item row" ]
     (  [ h1_ [ class_ "h4" ] [ text _noteTitle ] ]
@@ -257,8 +257,8 @@ noteView note =
         ]
     )
   where
-    _noteContent = content (noteContent note)
-    _noteTitle = (ms . fromMaybe "" . title . noteContent) note
+    _noteContent = noteContent (content note)
+    _noteTitle = (ms . fromMaybe "" . title . content) note
 
 noteContentView :: String -> [View a]
 noteContentView noteContentStr = map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr)
@@ -293,7 +293,7 @@ contentInputView contentValue =
     ]
 
 emptyNoteContent :: NoteContent
-emptyNoteContent = NoteContent { title = Nothing, content = "" }
+emptyNoteContent = NoteContent { title = Nothing, noteContent = "" }
 
 stringToMaybe :: String -> Maybe String
 stringToMaybe s = if s == "" then Nothing else Just s

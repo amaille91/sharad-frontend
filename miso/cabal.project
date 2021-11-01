@@ -1,1 +1,1 @@
-packages: sharad-frontend.cabal, ../../sharad-model/sharad-model.cabal
+packages: sharad-frontend.cabal, ../sharad-common/sharad-common.cabal
