@@ -37,18 +37,19 @@ update Dismissed        state = Effect Hiding [ logExpectedState Visible state, 
 
 
 view :: MisoString -> [ View a ] -> [ View a ] -> State -> [View a]
-view modalTitle bodyContent footerContent state = [ div_ ([ class_ "arbitrary-modal-overlay arbitrary-fade-quick"] ++ visibilityProperties) []
-                                                  , div_ ([ class_ "arbitrary-modal arbitrary-fade ", intProp "tabindex" (-1) ] ++ visibilityProperties)
-                                                      [ div_ [ class_ "arbitrary-modal-dialog" ]
-                                                          [ div_ [ class_ "arbitrary-modal-content" ] 
-                                                              [ div_ [ class_ "arbitrary-modal-header justify-content-center" ]
-                                                                  [ div_ [ class_ "arbitrary-modal-title" ] [ text modalTitle ] ]
-                                                              , div_ [ class_ "arbitrary-modal-body" ] bodyContent                
-                                                              , div_ [ class_ "modal-footer" ] footerContent
-                                                              ]
-                                                          ]
-                                                      ]
-                                                  ]
+view modalTitle bodyContent footerContent state = 
+    [ div_ ([ class_ "arbitrary-modal-overlay arbitrary-fade-quick"] ++ visibilityProperties) []
+    , div_ ([ class_ "arbitrary-modal arbitrary-fade ", intProp "tabindex" (-1) ] ++ visibilityProperties)
+        [ div_ [ class_ "arbitrary-modal-dialog" ]
+            [ div_ [ class_ "arbitrary-modal-content container" ] 
+                [ div_ [ class_ "arbitrary-modal-header justify-content-center row" ]
+                    [ div_ [ class_ "arbitrary-modal-title col" ] [ text modalTitle ] ]
+                , div_ [ class_ "arbitrary-modal-body" ] bodyContent
+                , div_ [ class_ "modal-footer row" ] [ div_ [ class_ "col" ] footerContent ]
+                ]
+            ]
+        ]
+    ]
   where
     visibilityProperties = case state of
       Hidden -> []

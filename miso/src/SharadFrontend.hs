@@ -353,10 +353,9 @@ modalNoteEditView title content editionState modalEditionState =
 modalChecklistEditView :: String -> [(ChecklistItem, Bool)] -> EditionState -> Modal.State -> [View AppEvent]
 modalChecklistEditView name items editionState modalEditionState =
   Modal.view "Création d'une checklist"
-            [ form_ [ class_ "row justify-content-center" ] 
-              [ checklistTitleInputView  $ ms $ name 
-              , checklistItemsView  items 
-              ]
+            [ checklistTitleInputView  $ ms $ name 
+            , checklistItemsView  items 
+            , button_ [ type_ "button", class_ "btn btn-light row", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [ text "+" ]
             ]
             [ button_ [ class_ "btn btn-secondary", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
             , button_ [ class_ "btn btn-primary", onClick (SharadEvent (NoteEditionFinidhed editionState)) ] [ text "Submit checklist" ]
@@ -379,7 +378,7 @@ noteContentInputView contentValue =
 
 checklistTitleInputView :: MisoString -> View AppEvent
 checklistTitleInputView name  =
-  div_ [ class_ "form-group mb-3" ]
+  div_ [ class_ "form-group mb-3 row" ]
     [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Nom de la liste" ]
     , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedChecklistTitle . fromMisoString), value_ name ]
     ]
@@ -387,13 +386,11 @@ checklistTitleInputView name  =
 checklistItemsView :: [(ChecklistItem, Bool)] -> View AppEvent
 checklistItemsView items =
   div_ [ class_ "form-group mb-3" ]
-    ([ label_ [ class_ "form-label" ] [ text "Items" ] ] ++
-    (map checklistItemView items) ++
-    [ button_ [ type_ "button", class_ "btn btn-light", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [] ])
+    ([ label_ [ class_ "row form-label" ] [ text "Items" ] ] ++ (map checklistItemView items))
 
 checklistItemView :: (ChecklistItem, Bool) -> View AppEvent
 checklistItemView (item, isEditing) =
-  div_ [] [ if not isEditing then text $ ms (label item) else checklistItemInputView item ] 
+  div_ [ class_ "row"] [ if not isEditing then text $ ms (label item) else checklistItemInputView item ] 
 
 checklistItemInputView :: ChecklistItem -> View AppEvent
 checklistItemInputView item = input_ [ type_ "text", id_ "checklist-item-input", class_ "form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
@@ -405,12 +402,13 @@ onKeyUp = on "keyup" onEnterInputDecoder
 
 onEnterInputDecoder :: Decoder (Maybe MisoString)
 onEnterInputDecoder = Decoder { decodeAt = DecodeTargets [["target"], []]
-                       , decoder = withArray "event" (\array -> do
-                            value <- withObject "target" (\o -> o .: "value") (array ! 0)
-                            KeyCode keyCode <- decoder keycodeDecoder (array ! 1)
-                            if keyCode == enterKeyCode then return $ Just value else return Nothing)
-                        }
-                        where enterKeyCode = 13 
+                              , decoder = withArray "event" (\array -> do
+                                   value <- withObject "target" (\o -> o .: "value") (array ! 0)
+                                   KeyCode keyCode <- decoder keycodeDecoder (array ! 1)
+                                   if keyCode == enterKeyCode then return $ Just value else return Nothing)
+                               }
+                               where enterKeyCode = 13 
+
 emptyNoteContent :: NoteContent
 emptyNoteContent = NoteContent { title = Nothing, noteContent = "" }
 
