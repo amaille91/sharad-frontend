@@ -29,6 +29,7 @@ library
     sharad-common,
     ghcjs-base,
     miso,
+    vector,
     bytestring,
     utf8-string,
     aeson,

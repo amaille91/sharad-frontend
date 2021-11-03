@@ -7,8 +7,10 @@ module SharadFrontend (runSharadFrontend) where
 import Prelude hiding (id)
 import GHC.Generics (Generic)
 import Data.Function ((&))
+import Control.Applicative ((<|>))
 import Control.Arrow
 import Data.List (intercalate)
+import Data.Vector ((!))
 import Data.Maybe (fromMaybe, fromJust)
 import Data.String (lines)
 import Data.ByteString.Internal (ByteString)
@@ -18,16 +20,18 @@ import Data.Map.Strict (singleton)
 import qualified Data.Bifunctor as Bifunctor (first, second, bimap)
 import Control.Monad.State.Strict (StateT, mapStateT)
 
-import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View, getElementById, addEventListener)
+import Miso (consoleLog, startApp, defaultEvents, stringify, App(..), View, getElementById, addEventListener, onCreated)
 import Miso.Types (LogLevel(Off), Transition, toTransition, fromTransition, mapAction)
 import Miso.String (ms, fromMisoString, MisoString)
-import Miso.Html (Attribute, h1_, text, p_, main_, span_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_)
+import Miso.Html (Attribute, h1_, text, p_, main_, span_, div_, nav_, ul_, li_, button_, i_, hr_, form_, legend_, label_, input_, textarea_, on)
 import Miso.Html.Event (onClick, onSubmit, onChange)
+import Miso.Event.Decoder (Decoder(..), DecodeTarget(..), valueDecoder, keycodeDecoder)
+import Miso.Event.Types (KeyCode(..))
 import Miso.Html.Property (id_, class_, type_, value_, textProp, intProp)
-import Miso.Effect (Effect, noEff, (<#))
+import Miso.Effect (Effect(..), noEff, (<#))
 import JavaScript.Web.XMLHttpRequest (xhrByteString, Response(..), Request(..), Method(..), RequestData(..))
 
-import Data.Aeson (FromJSON, ToJSON, encode)
+import Data.Aeson (Value(..), FromJSON, ToJSON, encode, withObject, withArray, Array(..), (.:))
 import qualified Data.Aeson as Aeson (decode)
 
 import qualified SharadFrontend.Modal as Modal
@@ -95,24 +99,32 @@ data SharadEventInstance = CheckForNotes
                          | DeleteNoteClicked String
                          | NoteDeleted String
                          | CreateChecklistClicked
+                         | AddNewItemToCurrentlyEditedChecklist
                          | UpdateCurrentlyEditedChecklistTitle String
+                         | ChecklistEditItemLabelChanged (Maybe String)
                          | ErrorHappened String
                          | NoteEditionFinidhed EditionState
                          | EditionAborted
                          | EditNoteClicked (Identifiable NoteContent)
                          | NoteChanged (Identifiable NoteContent)
+                         | NoEffect
+                         deriving (Show)
 
 initialModel :: Model
 initialModel = Model { notes = [], editionState = NotEditing, editionModalState = Modal.Hidden, errorStr = Nothing }
 
 updateApp :: AppEvent -> Model -> Effect AppEvent Model
 updateApp (NoteModalEvent event) model = Bifunctor.second (updateModalState model) $ updateModal event (editionModalState model)
-updateApp (SharadEvent event)    model = updateSharad event model
+updateApp (SharadEvent event)    model =
+    let Effect newModel subs = updateSharad event model
+    in Effect newModel ((\sink -> do
+        consoleLog $ ms ("receiving event: " ++ show event)) : subs)
 
 updateModal :: Modal.Event -> Modal.State -> Effect AppEvent Modal.State
 updateModal event state = Bifunctor.first fromModalEvent $ Modal.update event state
 
 updateSharad :: SharadEventInstance -> Model -> Effect AppEvent Model
+updateSharad NoEffect model                             = noEff model 
 updateSharad EditionAborted model                             = noEff model { editionState = NotEditing, editionModalState = Modal.Hidden }
 updateSharad (NoteEditionFinidhed finalEditionState) model        = Bifunctor.first fromSharadEvent $ handleNoteEditionFinished finalEditionState model
 updateSharad (NoteChanged newNote) model                   = noEff model { notes = changeNote (notes model) newNote }
@@ -125,6 +137,8 @@ updateSharad CreateNoteClicked model                              = (editionModa
 updateSharad (NoteCreated note) model                             = noEff $ model { notes = notes model ++ [note], editionState = NotEditing }
 updateSharad (NoteDeleted noteId) model                           = noEff $ model { notes = filter ((/= noteId) . id . storageId) $ notes model }
 updateSharad  CreateChecklistClicked model                        = (editionModalState ^>> (Modal.update Modal.ShowingTriggered) >>^ Bifunctor.bimap fromModalEvent (toEditingNewChecklist . (updateModalState model))) model
+updateSharad AddNewItemToCurrentlyEditedChecklist model           = let newModel = createNewChecklistItemAndEdit model in Effect newModel [(\sink -> (consoleLog . ms) $ "Editing checklist model: " ++ show (editionState newModel))]
+updateSharad (ChecklistEditItemLabelChanged newLabel) model   = noEff $ maybe model (updateItemLabel model) newLabel 
 updateSharad (UpdateCurrentlyEditedChecklistTitle newTitle) model = noEff $ model { editionState = updateEditedChecklistTitle (editionState model) newTitle }
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
 updateSharad (DeleteNoteClicked noteId) model                     = model <# do
@@ -132,9 +146,6 @@ updateSharad (DeleteNoteClicked noteId) model                     = model <# do
   if status response /= 200
     then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
     else return $ SharadEvent (NoteDeleted noteId)
-
-modifyState :: (Monad m) => (s -> s) -> StateT s m a -> StateT s m a
-modifyState f = mapStateT (\initialAction -> initialAction >>= (\(a, s) -> return (a, f s)))
 
 changeNote :: [Identifiable NoteContent] -> Identifiable NoteContent -> [Identifiable NoteContent]
 changeNote (n:otherNotes) newNote = 
@@ -147,6 +158,21 @@ toEditingNewNote model = model { editionState = EditingNewNote emptyNoteContent 
 
 toEditingNewChecklist :: Model -> Model
 toEditingNewChecklist model = model { editionState = EditingNewChecklist emptyChecklistContent }
+
+createNewChecklistItemAndEdit :: Model -> Model
+createNewChecklistItemAndEdit model = 
+    case editionState model of
+        EditingNewChecklist (editedContent, maybeEditingIndex) -> model { editionState = EditingNewChecklist (editedContent { items = items editedContent ++ [emptyChecklistItem] }, Just (length (items editedContent))) }
+        a                                                      -> model { errorStr = Just ("Cannot add new cheklist item while edition state is " ++ show a) } 
+
+updateItemLabel :: Model -> String -> Model
+updateItemLabel model newLabel =
+    case editionState model of
+        EditingNewChecklist (editedContent, Just idx) -> model { editionState = EditingNewChecklist (newEditedContent editedContent idx newLabel, Nothing) }
+        EditingExistingChecklist (oldChecklist) (editedContent, Just idx) -> model { editionState = EditingNewChecklist (newEditedContent editedContent idx newLabel, Nothing) }
+        anotherEditionState -> model { errorStr = Just $ "Cannot update item label while on edition state " ++ show (editionState model) }
+
+newEditedContent oldContent itemIdxToModify newLabel = oldContent { items = mapWithIndex (\currentIdx currentItem -> if currentIdx == itemIdxToModify then currentItem { label = newLabel } else currentItem) (items oldContent) }
 
 updateModalState :: Model -> Modal.State -> Model
 updateModalState model newModalState = model { editionModalState = newModalState }
@@ -245,7 +271,7 @@ appView model =
 navigationMenuView :: Maybe String -> View AppEvent
 navigationMenuView errorStr =
   nav_ [ class_ "container py-2" ] 
-    [ div_ [ class_ "row justify-content-end" ] [ openChecklistCreationModalButton, openNoteCreationModalButton ] ]
+    [ div_ [ class_ "row justify-content-end" ] [openChecklistCreationModalButton,  openNoteCreationModalButton ] ]
 
 listViewFromMaybe :: (a -> View AppEvent) -> Maybe a -> [View AppEvent]
 listViewFromMaybe toView maybeA = fmap (\a -> [ toView a ]) maybeA `orElse` []
@@ -263,6 +289,7 @@ role_ role = textProp "role" role
 openNoteCreationModalButton :: View AppEvent
 openNoteCreationModalButton = 
   button_ [ class_ "btn btn-primary", onClick (SharadEvent CreateNoteClicked) ] [ text "Create note" ]
+  
 
 openChecklistCreationModalButton :: View AppEvent
 openChecklistCreationModalButton  = 
@@ -328,7 +355,7 @@ modalChecklistEditView name items editionState modalEditionState =
   Modal.view "Création d'une checklist"
             [ form_ [ class_ "row justify-content-center" ] 
               [ checklistTitleInputView  $ ms $ name 
-              , checklistContentInputView  items 
+              , checklistItemsView  items 
               ]
             ]
             [ button_ [ class_ "btn btn-secondary", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
@@ -357,22 +384,41 @@ checklistTitleInputView name  =
     , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedChecklistTitle . fromMisoString), value_ name ]
     ]
 
-checklistContentInputView :: [(ChecklistItem, Bool)] -> View AppEvent
-checklistContentInputView items =
+checklistItemsView :: [(ChecklistItem, Bool)] -> View AppEvent
+checklistItemsView items =
   div_ [ class_ "form-group mb-3" ]
-    ([ label_ [ textProp "htmlFor" "inputContent", class_ "form-label" ] [ text "Items" ] ] ++
+    ([ label_ [ class_ "form-label" ] [ text "Items" ] ] ++
     (map checklistItemView items) ++
-    [ button_ [ class_ "btn btn-light" ] [ text "add new item" ] ])
+    [ button_ [ type_ "button", class_ "btn btn-light", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [] ])
 
 checklistItemView :: (ChecklistItem, Bool) -> View AppEvent
 checklistItemView (item, isEditing) =
-  div_ [] [ if isEditing then text $ ms (label item) else input_ [ type_ "text", id_ "checklist-item-input", class_ "form-control" ]] 
+  div_ [] [ if not isEditing then text $ ms (label item) else checklistItemInputView item ] 
 
+checklistItemInputView :: ChecklistItem -> View AppEvent
+checklistItemInputView item = input_ [ type_ "text", id_ "checklist-item-input", class_ "form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
+
+onBlur :: (MisoString -> action) -> Attribute action
+onBlur = on "blur" valueDecoder
+
+onKeyUp = on "keyup" onEnterInputDecoder
+
+onEnterInputDecoder :: Decoder (Maybe MisoString)
+onEnterInputDecoder = Decoder { decodeAt = DecodeTargets [["target"], []]
+                       , decoder = withArray "event" (\array -> do
+                            value <- withObject "target" (\o -> o .: "value") (array ! 0)
+                            KeyCode keyCode <- decoder keycodeDecoder (array ! 1)
+                            if keyCode == enterKeyCode then return $ Just value else return Nothing)
+                        }
+                        where enterKeyCode = 13 
 emptyNoteContent :: NoteContent
 emptyNoteContent = NoteContent { title = Nothing, noteContent = "" }
 
 emptyChecklistContent :: (ChecklistContent, Maybe Int)
 emptyChecklistContent = (ChecklistContent { name = "", items = [] }, Nothing)
+
+emptyChecklistItem :: ChecklistItem
+emptyChecklistItem = ChecklistItem { label = "", checked = False }
 
 stringToMaybe :: String -> Maybe String
 stringToMaybe s = if s == "" then Nothing else Just s
