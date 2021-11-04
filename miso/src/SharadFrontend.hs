@@ -112,6 +112,9 @@ data SharadEventInstance = CheckForContent
                          | ChecklistChanged (Identifiable ChecklistContent)
                          | ChecklistCreated (Identifiable ChecklistContent)
                          | UpdateChecklists [Identifiable ChecklistContent]
+                         | DeleteChecklistClicked String
+                         | ChecklistDeleted String
+                         | EditChecklistClicked (Identifiable ChecklistContent)
                          | ErrorHappened String
                          | NoteEditionFinidhed EditionState
                          | EditionAborted
@@ -156,12 +159,19 @@ updateSharad ChecklistEditionFinidhed model        = Bifunctor.first fromSharadE
 updateSharad (ChecklistChanged newChecklist) model                   = noEff model { allItems = changeChecklist (allItems model) newChecklist }
 updateSharad (ChecklistCreated checklist) model                             = noEff $ model { allItems = allItems model ++ [Checklist checklist], editionState = NotEditing }
 updateSharad (UpdateChecklists checklists) model                            = noEff model { allItems = filter (not . isChecklistItem) (allItems model) ++ map Checklist checklists }
+updateSharad (ChecklistDeleted noteId) model                           = noEff $ model { allItems = deleteChecklistFromId (allItems model) noteId }
+updateSharad (EditChecklistClicked checklist) model                         = Modal.update Modal.ShowingTriggered (editionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { editionState = EditingExistingChecklist checklist (content checklist, Nothing), editionModalState = m })
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
 updateSharad (DeleteNoteClicked noteId) model                     = model <# do
   response <- xhrByteString $ deleteNoteRequest noteId
   if status response /= 200
     then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
     else return $ SharadEvent (NoteDeleted noteId)
+updateSharad (DeleteChecklistClicked noteId) model                     = model <# do
+  response <- xhrByteString $ deleteChecklistRequest noteId
+  if status response /= 200
+    then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
+    else return $ SharadEvent (ChecklistDeleted noteId)
 
 changeNote :: [Items] -> Identifiable NoteContent -> [Items]
 changeNote (item:otherItems) newNote = case item of
@@ -188,7 +198,12 @@ isChecklistItem _        = False
 deleteNoteFromId :: [Items] -> String -> [Items]
 deleteNoteFromId [] noteId = [] 
 deleteNoteFromId ((Note n):rest) noteId = if (id . storageId) n == noteId then rest else (Note n) : deleteNoteFromId rest noteId
-deleteNoteFromId  (i:rest) noteId = i:deleteNoteFromId rest noteId
+deleteNoteFromId  (notANote:rest) noteId = notANote : deleteNoteFromId rest noteId
+
+deleteChecklistFromId :: [Items] -> String -> [Items]
+deleteChecklistFromId [] checklistId = [] 
+deleteChecklistFromId ((Checklist n):rest) checklistId = if (id . storageId) n == checklistId then rest else (Checklist n) : deleteChecklistFromId rest checklistId
+deleteChecklistFromId  (notAChecklist:rest) checklistId = notAChecklist : deleteChecklistFromId rest checklistId
 
 toEditingNewNote :: Model -> Model
 toEditingNewNote model = model { editionState = EditingNewNote emptyNoteContent }
@@ -440,7 +455,12 @@ checklistView :: Identifiable ChecklistContent -> View AppEvent
 checklistView checklist = 
   li_ [ class_ "row list-group-item" ]
     [ h2_ [ class_ "h4" ] [ text _checklistName ] 
-     , checklistContentView _checklistContent]
+    , checklistContentView _checklistContent
+    , div_ [ class_ "text-center" ]
+           [ button_ [ onClick (SharadEvent . DeleteChecklistClicked $ (id . storageId) checklist), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
+           , button_ [ onClick (SharadEvent $ EditChecklistClicked checklist), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
+           ]
+    ]
   where
     _checklistContent = (items . content) checklist
     _checklistName    = (ms . name . content) checklist
