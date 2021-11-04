@@ -30,6 +30,8 @@ import Miso.Event.Types (KeyCode(..))
 import Miso.Html.Property (id_, class_, type_, value_, href_, textProp, intProp)
 import Miso.Effect (Effect(..), noEff, (<#), Sub)
 import JavaScript.Web.XMLHttpRequest (xhrByteString, Response(..), Request(..), Method(..), RequestData(..))
+import Language.Javascript.JSaddle.Object (jsg1)
+import Language.Javascript.JSaddle.Types (JSM)
 
 import Data.Aeson (Value(..), FromJSON, ToJSON, encode, withObject, withArray, Array(..), (.:))
 import qualified Data.Aeson as Aeson (decode)
@@ -152,7 +154,7 @@ updateSharad CreateNoteClicked model                              = (editionModa
 updateSharad (NoteCreated note) model                             = noEff $ model { allItems = allItems model ++ [Note note], editionState = NotEditing }
 updateSharad (NoteDeleted noteId) model                           = noEff $ model { allItems = deleteNoteFromId (allItems model) noteId }
 updateSharad  CreateChecklistClicked model                        = (editionModalState ^>> (Modal.update Modal.ShowingTriggered) >>^ Bifunctor.bimap fromModalEvent (toEditingNewChecklist . (updateModalState model))) model
-updateSharad AddNewItemToCurrentlyEditedChecklist model           = let newModel = createNewChecklistItemAndEdit model in Effect newModel [(\sink -> (consoleLog . ms) $ "Editing checklist model: " ++ show (editionState newModel))]
+updateSharad AddNewItemToCurrentlyEditedChecklist model           = createNewChecklistItemAndEdit model
 updateSharad (ChecklistEditItemLabelChanged newLabel) model   = noEff $ maybe model (updateItemLabel model) newLabel 
 updateSharad (UpdateCurrentlyEditedChecklistTitle newTitle) model = noEff $ model { editionState = updateEditedChecklistTitle (editionState model) newTitle }
 updateSharad ChecklistEditionFinidhed model        = Bifunctor.first fromSharadEvent $ handleChecklistEditionFinished model
@@ -211,20 +213,24 @@ toEditingNewNote model = model { editionState = EditingNewNote emptyNoteContent 
 toEditingNewChecklist :: Model -> Model
 toEditingNewChecklist model = model { editionState = EditingNewChecklist emptyChecklistContent }
 
-createNewChecklistItemAndEdit :: Model -> Model
+createNewChecklistItemAndEdit :: Model -> Effect AppEvent Model
 createNewChecklistItemAndEdit model = 
     case editionState model of
-        EditingNewChecklist (editedContent, maybeEditingIndex) -> model { editionState = EditingNewChecklist (editedContent { items = items editedContent ++ [emptyChecklistItem] }, Just (length (items editedContent))) }
-        a                                                      -> model { errorStr = Just ("Cannot add new cheklist item while edition state is " ++ show a) } 
+        EditingNewChecklist (editedContent, maybeEditingIndex) -> model { editionState = EditingNewChecklist (editedContent { items = items editedContent ++ [emptyChecklistItem] }, Just (length (items editedContent))) } <# do
+            focus "checklist-item-input"
+            consoleLog "new item edited"
+            return $ SharadEvent NoEffect
+        EditingExistingChecklist originalChecklist (editedContent, maybeEditingIndex) -> noEff model { editionState = EditingExistingChecklist originalChecklist (editedContent { items = items editedContent ++ [emptyChecklistItem] }, Just (length (items editedContent))) }
+        a                                                      -> noEff model { errorStr = Just ("Cannot add new cheklist item while edition state is " ++ show a) } 
 
 updateItemLabel :: Model -> String -> Model
 updateItemLabel model newLabel =
     case editionState model of
         EditingNewChecklist (editedContent, Just idx) -> model { editionState = EditingNewChecklist (newEditedContent editedContent idx newLabel, Nothing) }
-        EditingExistingChecklist (oldChecklist) (editedContent, Just idx) -> model { editionState = EditingNewChecklist (newEditedContent editedContent idx newLabel, Nothing) }
+        EditingExistingChecklist (oldChecklist) (editedContent, Just idx) -> model { editionState = EditingExistingChecklist oldChecklist (newEditedContent editedContent idx newLabel, Nothing) }
         anotherEditionState -> model { errorStr = Just $ "Cannot update item label while on edition state " ++ show (editionState model) }
 
-newEditedContent oldContent itemIdxToModify newLabel = oldContent { items = mapWithIndex (\currentIdx currentItem -> if currentIdx == itemIdxToModify then currentItem { label = newLabel } else currentItem) (items oldContent) }
+newEditedContent oldContent itemIdxToModify newLabel = oldContent { items = mapWithIndexMaybe (\currentIdx currentItem -> if currentIdx == itemIdxToModify then if null newLabel then Nothing else Just currentItem { label = newLabel } else Just currentItem) (items oldContent) }
 
 updateModalState :: Model -> Modal.State -> Model
 updateModalState model newModalState = model { editionModalState = newModalState }
@@ -486,13 +492,19 @@ makeListOfEditingItems :: Maybe Int -> [ChecklistItem] -> [(ChecklistItem, Bool)
 makeListOfEditingItems Nothing           items = map (\item -> (item, False)) items
 makeListOfEditingItems (Just editingIdx) items = mapWithIndex (\currentIdx currentItem -> (currentItem, currentIdx ==  editingIdx)) items
 
-mapWithIndex :: (Int -> a -> b) -> [a] -> [b]
-mapWithIndex f l = fst fold_
+mapWithIndexMaybe :: (Int -> a -> Maybe b) -> [a] -> [b]
+mapWithIndexMaybe f l = fst fold_
     where
         fold_ = foldr accumulatingFunction ([], length l - 1) l 
         accumulatingFunction currentItem (accumulatingList, currentIdx) = (newAccumulatingList, currentIdx - 1)
-            where newAccumulatingList = f currentIdx currentItem : accumulatingList
+            where newAccumulatingList = let newRes = f currentIdx currentItem in
+                      case newRes of
+                          Just res -> res : accumulatingList
+                          Nothing -> accumulatingList
 
+mapWithIndex :: (Int -> a -> b) -> [a] -> [b]
+mapWithIndex f l = mapWithIndexMaybe (\i a -> Just (f i a)) l
+ 
 toEditingChecklistItem :: Int -> Int -> ChecklistItem -> (ChecklistItem, Bool)
 toEditingChecklistItem editingItemIdx currentIdx currentItem
     | editingItemIdx == currentIdx = (currentItem, True)
@@ -581,3 +593,6 @@ emptyChecklistItem = ChecklistItem { label = "", checked = False }
 
 stringToMaybe :: String -> Maybe String
 stringToMaybe s = if s == "" then Nothing else Just s
+
+focus :: String -> JSM AppEvent
+focus _id = SharadEvent NoEffect <$ jsg1 ("callFocus" :: String) _id
