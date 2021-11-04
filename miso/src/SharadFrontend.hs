@@ -563,10 +563,15 @@ checklistItemsEditView items =
 
 checklistItemEditView :: (ChecklistItem, Bool) -> View AppEvent
 checklistItemEditView (item, isEditing) =
-  div_ [ class_ "row"] [ if not isEditing then text $ ms (label item) else checklistItemInputView item ] 
+  div_ [ class_ "row justify-content-between"] (if not isEditing then checklistItemEditDisplayView item else [ checklistItemInputView item ]) 
 
 checklistItemInputView :: ChecklistItem -> View AppEvent
 checklistItemInputView item = input_ [ type_ "text", id_ "checklist-item-input", class_ "form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
+
+checklistItemEditDisplayView item = 
+        [ div_ [] [ text $ ms (label item) ]
+        , i_ [ class_ "bi bi-x align-self-end" ] []
+        ]
 
 onBlur :: (MisoString -> action) -> Attribute action
 onBlur = on "blur" valueDecoder
