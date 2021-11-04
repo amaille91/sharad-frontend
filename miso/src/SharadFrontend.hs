@@ -365,7 +365,7 @@ appView model =
     (modalEditView model ++ listViewFromMaybe errorView (errorStr model) ++
       [ createItemsButtonView (currentlyDisplayed model),  h1_ [ class_ "row h2 justify-content-center" ] [ text "Sharad" ] ] ++
       [ navigationMenuView (currentlyDisplayed model)
-      , ul_ [ class_ "row list-group" ] contentView
+      , ul_ [ class_ "list-group" ] contentView
       ]
     )
   where
@@ -423,7 +423,7 @@ openChecklistCreationModalButton  =
 
 noteView :: Identifiable NoteContent -> View AppEvent
 noteView note = 
-  li_ [ class_ "list-group-item" ]
+  li_ [ class_ "row list-group-item" ]
     (  [ h2_ [ class_ "h4" ] [ text _noteTitle ] ]
     ++ noteContentView _noteContent
     ++ [ div_ [ class_ "text-center" ]
@@ -438,15 +438,15 @@ noteView note =
 
 checklistView :: Identifiable ChecklistContent -> View AppEvent
 checklistView checklist = 
-  li_ [ class_ "list-group-item" ]
-    [ h2_ [ class_ "h4 row" ] [ text _checklistName ] 
+  li_ [ class_ "row list-group-item" ]
+    [ h2_ [ class_ "h4" ] [ text _checklistName ] 
      , checklistContentView _checklistContent]
   where
     _checklistContent = (items . content) checklist
     _checklistName    = (ms . name . content) checklist
 
 checklistContentView :: [ChecklistItem] -> View AppEvent
-checklistContentView items = ul_ [ class_ "row list-group-item list-group" ] (map (\item -> li_ [ class_ "list-group-item" ] [ checklistItemView item ]) items)
+checklistContentView items = ul_ [] (map (\item -> li_ [ class_ "row" ] [ checklistItemView item ]) items)
 
 checklistItemView :: ChecklistItem -> View AppEvent
 checklistItemView item = text $ ms (label item)
