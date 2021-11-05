@@ -383,11 +383,17 @@ asRequestBody = StringData . ms . toString . toStrict . encode
 appView :: Model -> View AppEvent
 appView model = 
   main_ [ id_ "App", class_ "container" ]
-    (modalEditView model ++ listViewFromMaybe errorView (errorStr model) ++
-      [ createItemsButtonView (currentlyDisplayed model),  h1_ [ class_ "row h2 justify-content-center" ] [ text "Sharad" ] ] ++
-      [ navigationMenuView (currentlyDisplayed model)
-      , ul_ [ class_ "list-group" ] contentView
-      ]
+    (modalEditView model ++ 
+    [ div_ [ class_ "row" ]
+        [ div_ [ class_ "col py-2" ]
+            (listViewFromMaybe errorView (errorStr model) ++ [ createItemsButtonView (currentlyDisplayed model)
+                                                             , h1_ [ class_ "row h2 justify-content-center" ] [ text "Sharad" ] 
+                                                             , navigationMenuView (currentlyDisplayed model)
+                                                             ])
+        ]
+    , div_ [ class_ "row" ]
+        [ div_ [ class_ "col" ] [ ul_ [ class_ "list-group" ] contentView ] ]
+    ]
     )
   where
       contentView = case currentlyDisplayed model of
@@ -445,14 +451,15 @@ openChecklistCreationModalButton  =
 noteView :: Identifiable NoteContent -> View AppEvent
 noteView note = 
   li_ [ class_ "row list-group-item" ]
-    (  [ h2_ [ class_ "h4" ] [ text _noteTitle ] ]
-    ++ noteContentView _noteContent
-    ++ [ div_ [ class_ "text-center" ]
-           [ button_ [ onClick (SharadEvent . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
-           , button_ [ onClick (SharadEvent $ EditNoteClicked note), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
-           ]
-        ]
-    )
+    [ div_ [ class_ "col" ]
+      ([ h2_ [ class_ "h4" ] [ text _noteTitle ] ]
+      ++ noteContentView _noteContent
+      ++ [ div_ [ class_ "text-center" ]
+             [ button_ [ onClick (SharadEvent . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
+             , button_ [ onClick (SharadEvent $ EditNoteClicked note), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
+             ]
+          ]
+    )]
   where
     _noteContent = noteContent (content note)
     _noteTitle = (ms . fromMaybe "" . title . content) note
@@ -460,19 +467,20 @@ noteView note =
 checklistView :: Identifiable ChecklistContent -> View AppEvent
 checklistView checklist = 
   li_ [ class_ "row list-group-item" ]
-    [ h2_ [ class_ "h4" ] [ text _checklistName ] 
-    , checklistContentView _checklistContent
-    , div_ [ class_ "text-center" ]
-           [ button_ [ onClick (SharadEvent . DeleteChecklistClicked $ (id . storageId) checklist), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]
-           , button_ [ onClick (SharadEvent $ EditChecklistClicked checklist), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
-           ]
-    ]
+    [ div_ [ class_ "col" ]
+      [ h2_ [ class_ "row h4" ] [ text _checklistName ] 
+      , div_ [ class_ "row" ] [ checklistContentView _checklistContent ]
+      , div_ [ class_ "row justify-content-center" ]
+         [ button_ [ onClick (SharadEvent . DeleteChecklistClicked $ (id . storageId) checklist), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ] 
+         , button_ [ onClick (SharadEvent $ EditChecklistClicked checklist), class_ "btn btn-sm btn-outline-info ml-2"] [ i_ [ class_ "bi bi-pen" ] [] ]
+         ] 
+      ]]
   where
     _checklistContent = (items . content) checklist
     _checklistName    = (ms . name . content) checklist
 
 checklistContentView :: [ChecklistItem] -> View AppEvent
-checklistContentView items = ul_ [] (map (\item -> li_ [ class_ "row" ] [ checklistItemView item ]) items)
+checklistContentView items = ul_ [ class_ "col" ] (map (\item -> li_ [ class_ "row" ] [ checklistItemView item ]) items)
 
 checklistItemView :: ChecklistItem -> View AppEvent
 checklistItemView item = text $ ms (label item)
@@ -514,12 +522,16 @@ modalNoteEditView :: Maybe String -> String -> EditionState -> Modal.State -> [V
 modalNoteEditView title content editionState modalEditionState =
   Modal.view "Création d'une note"
             [ form_ [ class_ "row justify-content-center" ] 
-              [ noteTitleInputView $ ms $ fromMaybe "" title
-              , noteContentInputView $ ms $ content
+              [ div_ [ class_ "col" ] 
+                [ noteTitleInputView $ ms $ fromMaybe "" title
+                , noteContentInputView $ ms $ content
+                ]
               ]
             ]
-            [ button_ [ class_ "btn btn-secondary", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
-            , button_ [ class_ "btn btn-primary", onClick (SharadEvent (NoteEditionFinidhed editionState)) ] [ text "Submit" ]
+            [ div_ [ class_ "row justify-content-end" ]
+              [ button_ [ class_ "col-4 btn btn-secondary mx-2", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
+              , button_ [ class_ "col-4 btn btn-primary", onClick (SharadEvent (NoteEditionFinidhed editionState)) ] [ text "Submit" ]
+              ]
             ]
             modalEditionState
 
@@ -528,50 +540,61 @@ modalChecklistEditView name items editionState modalEditionState =
   Modal.view "Création d'une checklist"
             [ checklistTitleInputView  $ ms $ name 
             , checklistItemsEditView  items 
-            , button_ [ type_ "button", class_ "btn btn-light row", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [ text "+" ]
             ]
-            [ button_ [ class_ "btn btn-secondary", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
-            , button_ [ class_ "btn btn-primary", onClick (SharadEvent ChecklistEditionFinidhed) ] [ text "Submit checklist" ]
+            [ div_ [ class_ "row justify-content-end" ]
+              [ button_ [ class_ "col-4 btn btn-secondary mx-2", onClick (SharadEvent EditionAborted) ] [ text "Cancel" ]
+              , button_ [ class_ "col-4 btn btn-primary", onClick (SharadEvent ChecklistEditionFinidhed) ] [ text "Submit checklist" ]
+              ]
             ]
             modalEditionState
 
 noteTitleInputView :: MisoString -> View AppEvent
 noteTitleInputView titleValue =
-  div_ [ class_ "form-group mb-3"]
-    [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Titre" ]
-    , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteTitle . fromMisoString), value_ titleValue ]
+  div_ [ class_ "row form-group mb-3"]
+    [ div_ [ class_ "col" ]
+      [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Titre" ]
+      , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteTitle . fromMisoString), value_ titleValue ]
+      ]
     ]
 
 noteContentInputView :: MisoString -> View AppEvent
 noteContentInputView contentValue =
-  div_ [ class_ "form-group mb-3"]
-    [ label_ [ textProp "htmlFor" "inputContent", class_ "form-label" ] [ text "Contenu" ]
-    , textarea_ [ id_ "inputContent", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteBody . fromMisoString), value_ contentValue ] []
+  div_ [ class_ "row form-group mb-3"]
+    [ div_ [ class_ "col" ]
+      [ label_ [ textProp "htmlFor" "inputContent", class_ "form-label" ] [ text "Contenu" ]
+      , textarea_ [ id_ "inputContent", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteBody . fromMisoString), value_ contentValue ] []
+      ]
     ]
 
 checklistTitleInputView :: MisoString -> View AppEvent
 checklistTitleInputView name  =
   div_ [ class_ "form-group mb-3 row" ]
-    [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Nom de la liste" ]
-    , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedChecklistTitle . fromMisoString), value_ name ]
+    [ div_ [ class_ "col" ]
+      [ label_ [ textProp "htmlFor" "inputTitle", class_ "row form-label" ] [ text "Nom de la liste" ]
+      , input_ [ type_ "text", id_ "inputTitle", class_ "row form-control", onChange (SharadEvent . UpdateCurrentlyEditedChecklistTitle . fromMisoString), value_ name ]
+      ]
     ]
 
 checklistItemsEditView :: [(ChecklistItem, Bool)] -> View AppEvent
 checklistItemsEditView items =
-  div_ [ class_ "form-group mb-3" ]
-    ([ label_ [ class_ "row form-label" ] [ text "Items" ] ] ++ (map checklistItemEditView items))
+  div_ [ class_ "row form-group mb-3" ]
+    [ div_ [ class_ "col" ]
+      ([ label_ [ class_ "row form-label" ] [ text "Items" ] ] ++ [ div_ [ class_ "row" ] [ ul_ [ class_ "col" ] (map checklistItemEditView items) ] ] ++ [button_ [ type_ "button", class_ "btn btn-block btn-outline-dark row", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [ text "+" ]])
+    ]
 
 checklistItemEditView :: (ChecklistItem, Bool) -> View AppEvent
 checklistItemEditView (item, isEditing) =
-  div_ [ class_ "row justify-content-between"] (if not isEditing then checklistItemEditDisplayView item else [ checklistItemInputView item ]) 
+  li_ [ class_ "row justify-content-between"]
+    (if not isEditing then checklistItemEditDisplayView item else [ checklistItemInputView item ])
 
 checklistItemInputView :: ChecklistItem -> View AppEvent
-checklistItemInputView item = input_ [ type_ "text", id_ "checklist-item-input", class_ "form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
+checklistItemInputView item = 
+    input_ [ type_ "text", id_ "checklist-item-input", class_ "row form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
 
 checklistItemEditDisplayView item = 
-        [ div_ [] [ text $ ms (label item) ]
-        , i_ [ class_ "bi bi-x align-self-end" ] []
-        ]
+  [ text $ ms (label item)
+  , i_ [ class_ "bi bi-x align-self-end" ] []
+  ]
 
 onBlur :: (MisoString -> action) -> Attribute action
 onBlur = on "blur" valueDecoder

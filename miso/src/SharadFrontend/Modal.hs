@@ -44,7 +44,7 @@ view modalTitle bodyContent footerContent state =
             [ div_ [ class_ "arbitrary-modal-content container" ] 
                 [ div_ [ class_ "arbitrary-modal-header justify-content-center row" ]
                     [ div_ [ class_ "arbitrary-modal-title col" ] [ text modalTitle ] ]
-                , div_ [ class_ "arbitrary-modal-body" ] bodyContent
+                , div_ [ class_ "row arbitrary-modal-body" ] [ div_ [ class_ "col" ] bodyContent ]
                 , div_ [ class_ "modal-footer row" ] [ div_ [ class_ "col" ] footerContent ]
                 ]
             ]
