@@ -79,12 +79,14 @@ data SharadEventInstance = CheckForContent
                          | DeleteChecklistClicked String
                          | ChecklistDeleted String
                          | EditChecklistClicked (Identifiable ChecklistContent)
+                         | ChecklistEditItemDeleteClicked Int
                          | ErrorHappened String
                          | NoteEditionFinidhed EditionState
                          | EditionAborted
                          | EditNoteClicked (Identifiable NoteContent)
                          | NoteChanged (Identifiable NoteContent)
                          | ChangeDisplayed ItemType
+                         | ErrorDismissed
                          | NoEffect
                          deriving (Show)
 
@@ -139,6 +141,7 @@ updateSharad (ChecklistCreated checklist) model                             = no
 updateSharad (UpdateChecklists checklists) model                            = noEff model { allItems = filter (not . isChecklistItem) (allItems model) ++ map Checklist checklists }
 updateSharad (ChecklistDeleted noteId) model                           = noEff $ model { allItems = deleteChecklistFromId (allItems model) noteId }
 updateSharad (EditChecklistClicked checklist) model                         = Modal.update Modal.ShowingTriggered (editionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { editionState = EditingExistingChecklist checklist (content checklist, Nothing), editionModalState = m })
+updateSharad (ChecklistEditItemDeleteClicked idx) model                         = noEff $ removeItemFromEditedChecklist idx model
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
 updateSharad (DeleteNoteClicked noteId) model                     = model <# catch (do
   response <- xhrByteString $ deleteNoteRequest noteId
@@ -151,6 +154,7 @@ updateSharad (DeleteChecklistClicked noteId) model                     = model <
   if status response /= 200
     then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
     else return $ SharadEvent (ChecklistDeleted noteId)
+updateSharad ErrorDismissed model                     = noEff model { errorStr = Nothing }
 
 -- ================================== Utils for UPDATE ==============================
 
@@ -216,6 +220,12 @@ deleteChecklistFromId :: [Items] -> String -> [Items]
 deleteChecklistFromId [] checklistId = [] 
 deleteChecklistFromId ((Checklist n):rest) checklistId = if (id . storageId) n == checklistId then rest else (Checklist n) : deleteChecklistFromId rest checklistId
 deleteChecklistFromId  (notAChecklist:rest) checklistId = notAChecklist : deleteChecklistFromId rest checklistId
+
+removeItemFromEditedChecklist :: Int -> Model -> Model
+removeItemFromEditedChecklist idx model = case editionState model of
+    EditingNewChecklist (editedContent, Nothing) -> model { editionState = EditingNewChecklist (editedContent { items = mapWithIndexMaybe (\currentIdx currentItem -> if currentIdx == idx then Nothing else Just currentItem) (items editedContent) }, Nothing) }
+    EditingExistingChecklist originalChecklist (editedContent, Nothing) -> model { editionState = EditingExistingChecklist originalChecklist (editedContent { items = mapWithIndexMaybe (\currentIdx currentItem -> if currentIdx == idx then Nothing else Just currentItem) (items editedContent) }, Nothing) }
+    _ -> model { errorStr = Just ("Unable to delete item in checklist while in edition state " ++ show (editionState model))}
 
 toEditingNewNote :: Model -> Model
 toEditingNewNote model = model { editionState = EditingNewNote emptyNoteContent }
@@ -451,9 +461,9 @@ listViewFromMaybe toView maybeA = maybe [] (\a -> [ toView a ]) maybeA
 errorView :: String -> View AppEvent
 errorView errorStr =
   div_ [ class_ "row mx-1 justify-content-center" ] 
-    [ div_ [ class_ "alert alert-danger alert-dismissible fade show w-100 text-center", role_ "alert" ]
+    [ div_ [ class_ "alert alert-danger w-100 text-center with-close-button", role_ "alert" ]
       [ text (ms errorStr)
-      , button_ [ type_ "button", class_ "close", textProp "data-dismiss" "alert" ] [ span_ [] [ text "x" ] ]
+      , button_ [ type_ "button", class_ "close", onClick (SharadEvent ErrorDismissed)  ] [ span_ [] [ text "x" ] ]
       ]
     ]
   
@@ -509,9 +519,9 @@ checklistItemView item = text $ ms (label item)
 noteContentView :: String -> [View a]
 noteContentView noteContentStr = map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr)
 
-makeListOfEditingItems :: Maybe Int -> [ChecklistItem] -> [(ChecklistItem, Bool)]
-makeListOfEditingItems Nothing           items = map (\item -> (item, False)) items
-makeListOfEditingItems (Just editingIdx) items = mapWithIndex (\currentIdx currentItem -> (currentItem, currentIdx ==  editingIdx)) items
+makeListOfEditingItems :: Maybe Int -> [ChecklistItem] -> [(ChecklistItem, Int, Bool)]
+makeListOfEditingItems Nothing           items = mapWithIndex (\currentIdx item -> (item, currentIdx, False)) items
+makeListOfEditingItems (Just editingIdx) items = mapWithIndex (\currentIdx currentItem -> (currentItem, currentIdx, currentIdx ==  editingIdx)) items
 
 mapWithIndexMaybe :: (Int -> a -> Maybe b) -> [a] -> [b]
 mapWithIndexMaybe f l = fst fold_
@@ -548,7 +558,7 @@ modalNoteEditView title content editionState modalEditionState =
             ]
             modalEditionState
 
-modalChecklistEditView :: String -> [(ChecklistItem, Bool)] -> EditionState -> Modal.State -> [View AppEvent]
+modalChecklistEditView :: String -> [(ChecklistItem, Int, Bool)] -> EditionState -> Modal.State -> [View AppEvent]
 modalChecklistEditView name items editionState modalEditionState =
   Modal.view "Création d'une checklist"
             [ checklistTitleInputView  $ ms $ name 
@@ -588,25 +598,28 @@ checklistTitleInputView name  =
       ]
     ]
 
-checklistItemsEditView :: [(ChecklistItem, Bool)] -> View AppEvent
+checklistItemsEditView :: [(ChecklistItem, Int, Bool)] -> View AppEvent
 checklistItemsEditView items =
   div_ [ class_ "row form-group mb-3" ]
     [ div_ [ class_ "col" ]
       ([ label_ [ class_ "row form-label" ] [ text "Items" ] ] ++ [ div_ [ class_ "row" ] [ ul_ [ class_ "col" ] (map checklistItemEditView items) ] ] ++ [button_ [ type_ "button", class_ "btn btn-block btn-outline-dark row", onClick (SharadEvent AddNewItemToCurrentlyEditedChecklist) ] [ text "+" ]])
     ]
 
-checklistItemEditView :: (ChecklistItem, Bool) -> View AppEvent
-checklistItemEditView (item, isEditing) =
+checklistItemEditView :: (ChecklistItem, Int, Bool) -> View AppEvent
+checklistItemEditView (item, idx, isEditing) =
   li_ [ class_ "row justify-content-between"]
-    (if not isEditing then checklistItemEditDisplayView item else [ checklistItemInputView item ])
+    (if not isEditing then checklistItemEditDisplayView item idx else [ checklistItemInputView item ])
 
 checklistItemInputView :: ChecklistItem -> View AppEvent
 checklistItemInputView item = 
     input_ [ type_ "text", id_ "checklist-item-input", class_ "row form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
 
-checklistItemEditDisplayView item = 
-  [ text $ ms (label item)
-  , i_ [ class_ "bi bi-x align-self-end" ] []
+checklistItemEditDisplayView :: ChecklistItem -> Int -> [View AppEvent]
+checklistItemEditDisplayView item idx = 
+  [ div_ [ class_ "col with-close-button" ]
+    [ text $ ms (label item)
+    , button_ [ class_ "close", onClick (SharadEvent $ ChecklistEditItemDeleteClicked idx)] [ i_ [ class_ "bi bi-x align-self-end" ] [] ]
+    ]
   ]
 
 onBlur :: (MisoString -> action) -> Attribute action

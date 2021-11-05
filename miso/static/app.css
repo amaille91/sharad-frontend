@@ -137,3 +137,16 @@ nav.d-flex {
 .arbitrary-modal-footer > * {
   margin: .25rem;
 }
+
+.with-close-button {
+  padding-right: 4rem;
+}
+
+.with-close-button button {
+  position: absolute;
+  right: 0;
+  top: 0;
+  z-index: 2;
+  padding: .75rem 1.25rem;
+  color: inherit;
+}
