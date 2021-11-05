@@ -26,7 +26,7 @@ import Miso.Types (LogLevel(Off), Transition, toTransition, fromTransition, mapA
 import Miso.String (ms, fromMisoString, MisoString)
 import Miso.Html (Attribute, h1_, h2_, text, p_, main_, header_, span_, div_, nav_, ul_, li_, button_, a_, i_, hr_, form_, legend_, label_, input_, textarea_, on)
 import Miso.Html.Event (onClick, onSubmit, onChange)
-import Miso.Event.Decoder (Decoder(..), DecodeTarget(..), valueDecoder, keycodeDecoder)
+import Miso.Event.Decoder (Decoder(..), DecodeTarget(..), emptyDecoder, valueDecoder, keycodeDecoder)
 import Miso.Event.Types (KeyCode(..))
 import Miso.Html.Property (id_, class_, type_, value_, href_, textProp, intProp)
 import Miso.Effect (Effect(..), noEff, (<#), Sub)
@@ -79,6 +79,7 @@ data SharadEventInstance = CheckForContent
                          | DeleteChecklistClicked String
                          | ChecklistDeleted String
                          | EditChecklistClicked (Identifiable ChecklistContent)
+                         | ChecklistEditItemEditClicked Int
                          | ChecklistEditItemDeleteClicked Int
                          | ErrorHappened String
                          | NoteEditionFinidhed EditionState
@@ -142,6 +143,7 @@ updateSharad (UpdateChecklists checklists) model                            = no
 updateSharad (ChecklistDeleted noteId) model                           = noEff $ model { allItems = deleteChecklistFromId (allItems model) noteId }
 updateSharad (EditChecklistClicked checklist) model                         = Modal.update Modal.ShowingTriggered (editionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { editionState = EditingExistingChecklist checklist (content checklist, Nothing), editionModalState = m })
 updateSharad (ChecklistEditItemDeleteClicked idx) model                         = noEff $ removeItemFromEditedChecklist idx model
+updateSharad (ChecklistEditItemEditClicked idx) model                         = noEff $ editChecklistItem idx model
 updateSharad (ErrorHappened newErrorStr) model                    = noEff model { errorStr = Just newErrorStr }
 updateSharad (DeleteNoteClicked noteId) model                     = model <# catch (do
   response <- xhrByteString $ deleteNoteRequest noteId
@@ -225,6 +227,12 @@ removeItemFromEditedChecklist :: Int -> Model -> Model
 removeItemFromEditedChecklist idx model = case editionState model of
     EditingNewChecklist (editedContent, Nothing) -> model { editionState = EditingNewChecklist (editedContent { items = mapWithIndexMaybe (\currentIdx currentItem -> if currentIdx == idx then Nothing else Just currentItem) (items editedContent) }, Nothing) }
     EditingExistingChecklist originalChecklist (editedContent, Nothing) -> model { editionState = EditingExistingChecklist originalChecklist (editedContent { items = mapWithIndexMaybe (\currentIdx currentItem -> if currentIdx == idx then Nothing else Just currentItem) (items editedContent) }, Nothing) }
+    _ -> model { errorStr = Just ("Unable to delete item in checklist while in edition state " ++ show (editionState model))}
+
+editChecklistItem :: Int -> Model -> Model
+editChecklistItem idx model = case editionState model of
+    EditingNewChecklist (editedContent, Nothing) -> model { editionState = EditingNewChecklist (editedContent, Just idx) }
+    EditingExistingChecklist originalChecklist (editedContent, Nothing) -> model { editionState = EditingExistingChecklist originalChecklist (editedContent, Just idx) }
     _ -> model { errorStr = Just ("Unable to delete item in checklist while in edition state " ++ show (editionState model))}
 
 toEditingNewNote :: Model -> Model
@@ -607,20 +615,20 @@ checklistItemsEditView items =
 
 checklistItemEditView :: (ChecklistItem, Int, Bool) -> View AppEvent
 checklistItemEditView (item, idx, isEditing) =
-  li_ [ class_ "row justify-content-between"]
-    (if not isEditing then checklistItemEditDisplayView item idx else [ checklistItemInputView item ])
+  li_ [ class_ "row"]
+    [ if not isEditing then checklistItemEditDisplayView item idx else checklistItemInputView item ]
 
 checklistItemInputView :: ChecklistItem -> View AppEvent
 checklistItemInputView item = 
-    input_ [ type_ "text", id_ "checklist-item-input", class_ "row form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ]
+    div_ [class_ "col" ]
+      [ input_ [ type_ "text", id_ "checklist-item-input", class_ "row form-control", onBlur (SharadEvent . ChecklistEditItemLabelChanged . Just . fromMisoString), onKeyUp (SharadEvent . ChecklistEditItemLabelChanged . (fmap fromMisoString)), value_ (ms $ label item)  ] ]
 
-checklistItemEditDisplayView :: ChecklistItem -> Int -> [View AppEvent]
+checklistItemEditDisplayView :: ChecklistItem -> Int -> View AppEvent
 checklistItemEditDisplayView item idx = 
-  [ div_ [ class_ "col with-close-button" ]
-    [ text $ ms (label item)
+  div_ [ class_ "col with-close-button" ]
+    [ span_ [on "dblclick" emptyDecoder $ const $ SharadEvent (ChecklistEditItemEditClicked idx)] [ text $ ms (label item) ]
     , button_ [ class_ "close", onClick (SharadEvent $ ChecklistEditItemDeleteClicked idx)] [ i_ [ class_ "bi bi-x align-self-end" ] [] ]
     ]
-  ]
 
 onBlur :: (MisoString -> action) -> Attribute action
 onBlur = on "blur" valueDecoder
