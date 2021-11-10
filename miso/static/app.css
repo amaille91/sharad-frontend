@@ -149,3 +149,90 @@ nav.d-flex {
   z-index: 2;
   color: inherit;
 }
+
+.checklist-item-checkbox {
+  display: none;
+}
+
+.svg-checkbox {
+  width: 1em;
+  height: 1em;
+}
+
+.checklist-item-checkbox:checked ~ .svg-checkbox-unchecked {
+  animation: disappear .125s forwards;
+}
+
+.checklist-item-checkbox:not(:checked) ~ .svg-checkbox-unchecked {
+  animation: appear .25s forwards;
+}
+
+.checklist-item-checkbox:checked ~ .svg-checkbox-checked {
+  animation: appear .25s forwards;
+}
+
+.checklist-item-checkbox:not(:checked) ~ .svg-checkbox-checked {
+  animation: disappear .125s forwards;
+}
+
+.svg-checkbox-checked {
+  fill: #ffbb1a;
+}
+
+@keyframes disappear {
+  0% {
+          opacity: 1;
+          width: 1em;
+          height: 1em;
+  }
+
+  50% {
+          opacity: 0.5;
+          width: 1em;
+          height: 1em;
+  }
+  
+  99% {
+          opacity: 0.01;
+          width: 1em;
+          height: 1em;
+  }
+
+  100% {
+          opacity: 0;
+          width: 0;
+          height: 0;
+  }
+}
+
+@keyframes appear {
+  0% {
+          opacity: 0;
+          width: 0;
+          height: 0;
+  }
+
+  49% {
+          opacity: 0;
+          width: 0;
+          height: 0;
+  }
+  
+  50% {
+          opacity: 0.01;
+          width: 1em;
+          height: 1em;
+  }
+  
+  99% {
+          opacity: 0.99;
+          width: 1em;
+          height: 1em;
+  }
+
+  100% {
+          opacity: 1;
+          width: 1em;
+          height: 1em;
+  }
+}
