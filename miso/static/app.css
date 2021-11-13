@@ -159,80 +159,28 @@ nav.d-flex {
   height: 1em;
 }
 
-.checklist-item-checkbox:checked ~ .svg-checkbox-unchecked {
-  animation: disappear .125s forwards;
-}
-
-.checklist-item-checkbox:not(:checked) ~ .svg-checkbox-unchecked {
-  animation: appear .25s forwards;
-}
-
-.checklist-item-checkbox:checked ~ .svg-checkbox-checked {
-  animation: appear .25s forwards;
-}
-
-.checklist-item-checkbox:not(:checked) ~ .svg-checkbox-checked {
-  animation: disappear .125s forwards;
+.svg-checkbox:not(.appearing), .svg-checkbox:not(.disappearing) {
+  opacity: 1;
 }
 
 .svg-checkbox-checked {
   fill: #ffbb1a;
 }
 
-@keyframes disappear {
-  0% {
-          opacity: 1;
-          width: 1em;
-          height: 1em;
-  }
+.appearing {
+  animation: appear .40s linear forwards;
+}
 
-  50% {
-          opacity: 0.5;
-          width: 1em;
-          height: 1em;
-  }
-  
-  99% {
-          opacity: 0.01;
-          width: 1em;
-          height: 1em;
-  }
-
-  100% {
-          opacity: 0;
-          width: 0;
-          height: 0;
-  }
+.disappearing {
+  animation: disappear .20s linear forwards;
 }
 
 @keyframes appear {
-  0% {
-          opacity: 0;
-          width: 0;
-          height: 0;
-  }
+  from {opacity: 0;}
+  to {opacity: 1;}
+}
 
-  49% {
-          opacity: 0;
-          width: 0;
-          height: 0;
-  }
-  
-  50% {
-          opacity: 0.01;
-          width: 1em;
-          height: 1em;
-  }
-  
-  99% {
-          opacity: 0.99;
-          width: 1em;
-          height: 1em;
-  }
-
-  100% {
-          opacity: 1;
-          width: 1em;
-          height: 1em;
-  }
+@keyframes disappear {
+  from {opacity: 1;}
+  to {opacity: 0;}
 }
