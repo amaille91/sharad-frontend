@@ -95,12 +95,14 @@ data SharadEventInstance = CheckForContent
                          | ChecklistChanged (Identifiable ChecklistContent)
                          | EditChecklistTitle (Identifiable ChecklistContent)
                          | EditItemLabel Int
+                         | AddItemToChecklist (Identifiable ChecklistContent)
                          | ErrorHappened String
                          | NoteEditionFinidhed
                          | NoteEditionAborted
                          | EditNoteClicked (Identifiable NoteContent)
                          | NoteChanged (Identifiable NoteContent)
                          | ChangeDisplayed
+                         | ScrollAndFocus String
                          | ErrorDismissed
                          | TransitionCheckboxDisappearingEnd
                          | NoEffect
@@ -187,6 +189,15 @@ updateSharad (DeleteChecklistClicked checklistId) model = model <# do
     then return $ SharadEvent (ErrorHappened "Server answer != 200 OK")
     else return $ SharadEvent (ChecklistDeleted checklistId)
 updateSharad ErrorDismissed model                     = noEff model { errorStr = Nothing }
+updateSharad (AddItemToChecklist checklist) model@Model {currentlyDisplayed = ChecklistType oldChecklists Nothing } = newModel <# (return $ SharadEvent $ ScrollAndFocus "checklist-item-input")
+  where
+    newModel = model { currentlyDisplayed = ChecklistType (newChecklists) (Just (newChecklist, EditingItems $ EditingLabel indexToEdit))}
+    newChecklists = addItemToChecklist checklist oldChecklists
+    indexToEdit = (length $ items newContent) - 1
+    newChecklist = checklist { content = newContent }
+    newContent = (content checklist) { items = (items (content checklist)) ++ [emptyChecklistItem] }
+updateSharad (ScrollAndFocus elementId) model = model <# ((SharadEvent NoEffect) <$ (focus (ms elementId) >> scrollIntoView (ms elementId)))
+
 
 -- ================================== Utils for UPDATE ==============================
 
@@ -250,6 +261,12 @@ changeChecklist newChecklist (item:otherItems) =
   if (id . storageId) item == (id . storageId) newChecklist 
     then newChecklist : otherItems
     else item         : changeChecklist newChecklist otherItems
+
+addItemToChecklist :: Identifiable ChecklistContent -> [Identifiable ChecklistContent] -> [Identifiable ChecklistContent]
+addItemToChecklist checklist checklists = changeChecklist (checklist { content = newContent }) checklists
+  where
+    newContent = (content checklist) { items = newItems }
+    newItems = (items $ content checklist) ++ [emptyChecklistItem]
 
 deleteIdentifiableFromId :: Content a => [Identifiable a] -> String -> [Identifiable a]
 deleteIdentifiableFromId [] noteId = [] -- TODO propagate error not finding item to delete
@@ -543,12 +560,22 @@ checklistView clEditionSt checklist =
       _ -> div_ [ onDoubleClick (SharadEvent $ EditChecklistTitle checklist)] [ text $ ms  _checklistName ]
     
     checklistContentItemView :: Maybe ChecklistEditionState -> Identifiable ChecklistContent -> [ChecklistItem] -> View AppEvent
-    checklistContentItemView clEditionState originalChecklist items = ul_ [ class_ "col" ] (mapWithIndex (\idx item -> li_ [ class_ "row" ] [ checklistItemView (maybeItemEditionState idx clEditionState) originalChecklist (item, idx) ]) items)
-      where
-        maybeItemEditionState :: Int -> Maybe ChecklistEditionState -> Maybe ChecklistItemsEditionState 
-        maybeItemEditionState currentlyEditedIdx (Just (EditingItems cles@(EditingLabel idx))) = if idx == currentlyEditedIdx then Just cles else Nothing 
-        maybeItemEditionState currentlyEditedIdx (Just (EditingItems (CheckItemTransitioning idx transitioningState))) = if idx == currentlyEditedIdx then (Just $ CheckItemTransitioning idx transitioningState) else Nothing 
-        maybeItemEditionState currentlyEditedIdx _ = Nothing
+    checklistContentItemView clEditionState originalChecklist items = ul_ [ class_ "col" ] ((mapWithIndex (\idx item -> li_ [ class_ "row" ] [ checklistItemView (maybeItemEditionState idx clEditionState) originalChecklist (item, idx) ]) items) ++ addItemButton)
+
+    maybeItemEditionState :: Int -> Maybe ChecklistEditionState -> Maybe ChecklistItemsEditionState 
+    maybeItemEditionState currentlyEditedIdx (Just (EditingItems cles@(EditingLabel idx))) = if idx == currentlyEditedIdx then Just cles else Nothing 
+    maybeItemEditionState currentlyEditedIdx (Just (EditingItems (CheckItemTransitioning idx transitioningState))) = if idx == currentlyEditedIdx then (Just $ CheckItemTransitioning idx transitioningState) else Nothing 
+    maybeItemEditionState currentlyEditedIdx _ = Nothing
+
+    addItemButton :: [View AppEvent]
+    addItemButton =
+      [ li_ [ class_ "row" ]
+        [ div_ [ class_ "col" ]
+          [ button_ [ class_ "btn btn-light btn-block", type_ "button", onClick (SharadEvent $ AddItemToChecklist checklist) ]
+            [ text "+" ]
+          ]
+        ]
+      ]
 
 checklistItemView :: Maybe ChecklistItemsEditionState -> Identifiable ChecklistContent -> (ChecklistItem, Int) -> View AppEvent
 checklistItemView maybeChecklistEditionState originalChecklist (item, idx) =
@@ -720,8 +747,3 @@ emptyChecklistContent = ChecklistContent { name = "", items = [] }
 emptyChecklistItem :: ChecklistItem
 emptyChecklistItem = ChecklistItem { label = "", checked = False }
 
-stringToMaybe :: String -> Maybe String
-stringToMaybe s = if s == "" then Nothing else Just s
-
--- focus :: String -> JSM AppEvent
--- focus _id = SharadEvent NoEffect <$ jsg1 ("callFocus" :: String) _id
