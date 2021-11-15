@@ -45,49 +45,40 @@ import qualified SharadFrontend.Modal as Modal
 import Model
 
 data Model = Model { currentlyDisplayed :: DisplayMode
-                   , notesData :: [Identifiable NoteContent]
+                   , notesData :: NoteData
                    , checklistsData :: ChecklistData
                    , editionModalState :: Modal.State
                    , errorStr :: Maybe String
                    } deriving(Eq, Show)
 
-data DisplayMode = NoteType [Identifiable NoteContent] (Maybe NoteEditionState)
+data DisplayMode = NoteType
                  | ChecklistType deriving (Eq, Show)
 
-data NoteEditionState = EditingNewNote NoteContent
-                      | EditingExistingNote (Identifiable NoteContent) NoteContent
-                      deriving (Eq, Show)
+data NoteData = NotDisplayingNotes [Identifiable NoteContent]
+              | DisplayingNotes NotesDisplayedState
+              deriving (Eq, Show)
+
+type NotesDisplayedState = ([Identifiable NoteContent], Maybe (Identifiable NoteContent, NoteEditingState))
+
+data NoteEditingState = EditingNoteTitle | EditingNoteBody deriving (Eq, Show)
 
 data AppEvent =  AppModalEvent Modal.Event
-              | SharadEvent SharadEventInstance
+              | NoteEventInstance NoteEvent
               | ChecklistEvent ChecklistEventInstance
               | SystemEventInstance SystemEvent
               | ChangeDisplayed
+              deriving (Eq, Show)
           
-data SharadEventInstance = NotesRetrieved [Identifiable NoteContent]
-                         | CreateNoteClicked
-                         | NoteCreated (Identifiable NoteContent)
-                         | EditNoteClicked (Identifiable NoteContent)
-                         | UpdateCurrentlyEditedNoteTitle String
-                         | UpdateCurrentlyEditedNoteBody String
-                         | NoteEditionAborted
-                         | NoteEditionFinidhed
-                         | NoteChanged (Identifiable NoteContent)
-                         | DeleteNoteClicked String
-                         | NoteDeleted String
-                         | ErrorDismissed
-                         | SharadSystemEvent SystemEvent
-                         deriving (Show)
-
 data SystemEvent = ErrorHappened String
                  | ScrollAndFocus String
                  | NoEffect
                  | CheckForContent
+                 | ErrorDismissed
                  deriving (Eq, Show)
 
 misoApp :: App Model AppEvent
 misoApp = App { model = initialModel 
-              , update = updateApp
+              , update = logWrapperUpdateApp
               , view = appView
               , subs = []
               , events = defaultEvents <> singleton "animationend" False
@@ -97,8 +88,8 @@ misoApp = App { model = initialModel
               }
 
 initialModel :: Model
-initialModel = Model { currentlyDisplayed = NoteType [] Nothing
-                     , notesData = []
+initialModel = Model { currentlyDisplayed = NoteType
+                     , notesData = NotDisplayingNotes []
                      , checklistsData = NotDisplayingChecklist []
                      , editionModalState = Modal.Hidden
                      , errorStr = Nothing
@@ -107,14 +98,19 @@ initialModel = Model { currentlyDisplayed = NoteType [] Nothing
 runSharadFrontend :: IO ()
 runSharadFrontend = startApp misoApp
 
+logWrapperUpdateApp :: AppEvent -> Model -> Effect AppEvent Model
+logWrapperUpdateApp event model =
+  let Effect newModel subs = updateApp event model
+  in Effect newModel ((\sink -> do
+      consoleLog $ ms ("receiving event: " ++ show event)) : subs)
+
 updateApp :: AppEvent -> Model -> Effect AppEvent Model
 updateApp (SystemEventInstance event) model = updateSystem event model
 updateApp (AppModalEvent event) model = Bifunctor.second (updateModalState model) $ updateModal event (editionModalState model)
 updateApp ChangeDisplayed model = switchCurrentlyDisplayed model
-updateApp (SharadEvent event)    model =
-    let Effect newModel subs = updateSharad event model
-    in Effect newModel ((\sink -> do
-        consoleLog $ ms ("receiving event: " ++ show event)) : subs)
+updateApp (NoteEventInstance event) model@(Model { notesData = notesData_ }) = Bifunctor.bimap (either SystemEventInstance NoteEventInstance)
+                                                                                               (\newNotesData -> model { notesData = newNotesData })
+                                                                                               (updateNote event notesData_)
 updateApp (ChecklistEvent event) model = updateChecklist event model
 
 updateModal :: Modal.Event -> Modal.State -> Effect AppEvent Modal.State
@@ -124,7 +120,8 @@ updateSystem :: SystemEvent -> Model -> Effect AppEvent Model
 updateSystem NoEffect model = noEff model
 updateSystem (ScrollAndFocus elementId) model = model <# ((SystemEventInstance NoEffect) <$ (focus (ms elementId) >> scrollIntoView (ms elementId)))
 updateSystem (ErrorHappened newErrorStr) model = noEff model { errorStr = Just newErrorStr }
-updateSystem CheckForContent model = Effect model (map toSubscription [SharadEvent <$> handleCheckForNotes, either SystemEventInstance (ChecklistEvent) <$> handleCheckForChecklists])
+updateSystem ErrorDismissed model = noEff model { errorStr = Nothing }
+updateSystem CheckForContent model = Effect model (map toSubscription [either SystemEventInstance NoteEventInstance <$> handleCheckForNotes, either SystemEventInstance (ChecklistEvent) <$> handleCheckForChecklists])
 
 toSubscription :: IO a -> Sub a
 toSubscription io = (\sink -> do
@@ -141,55 +138,45 @@ updateChecklist event model = case checklistsData model of
     toSharadEvent = either SystemEventInstance
                            (ChecklistEvent)
 
-updateSharad :: SharadEventInstance -> Model -> Effect AppEvent Model
-updateSharad NoteEditionAborted model@Model {currentlyDisplayed = NoteType notes _ } = noEff model { currentlyDisplayed = NoteType notes Nothing, editionModalState = Modal.Hidden }
-updateSharad NoteEditionFinidhed model        = Bifunctor.first fromSharadEvent $ handleNoteEditionFinished model
-updateSharad (NoteChanged newNote) model                   = noEff $ handleNoteChanged model newNote
-updateSharad (EditNoteClicked note) model                         = Modal.update Modal.ShowingTriggered (editionModalState model) & Bifunctor.bimap fromModalEvent (\m -> model { currentlyDisplayed = updateToEditingExistingNote note (currentlyDisplayed model), editionModalState = m })
-updateSharad (NotesRetrieved notes) model@Model{ currentlyDisplayed = NoteType _ noteEditionStatus }    = noEff model { currentlyDisplayed = NoteType notes noteEditionStatus, notesData = notes }
-updateSharad (NotesRetrieved notes) model = noEff model { notesData = notes }
-updateSharad (UpdateCurrentlyEditedNoteTitle newTitle) model      = noEff $ updateEditedNoteTitle model newTitle
-updateSharad (UpdateCurrentlyEditedNoteBody newBody) model        = noEff $ updateEditedNoteBody model newBody
-updateSharad CreateNoteClicked model                              = (editionModalState ^>> (Modal.update Modal.ShowingTriggered) >>^ Bifunctor.bimap fromModalEvent (toEditingNewNote . (updateModalState model))) model
-updateSharad (NoteCreated note) model@Model { currentlyDisplayed = NoteType oldNotes _ } = noEff $ model { currentlyDisplayed = NoteType (oldNotes ++ [note]) Nothing }
-updateSharad (NoteDeleted noteId) model@Model { currentlyDisplayed = NoteType oldNotes _ } = noEff $ model { currentlyDisplayed = NoteType (deleteIdentifiableFromId oldNotes noteId) Nothing }
-updateSharad (SharadSystemEvent event) model                    = updateSystem event model
-updateSharad (DeleteNoteClicked noteId) model                     = model <# catch (do
-  response <- xhrByteString $ deleteNoteRequest noteId
-  if status response /= 200
-    then return $ SharadEvent (SharadSystemEvent $ ErrorHappened "Server answer != 200 OK")
-    else return $ SharadEvent (NoteDeleted noteId))
-  (\(e :: SomeException) -> return $ SharadEvent (SharadSystemEvent $ ErrorHappened "NetworkError"))
-updateSharad ErrorDismissed model                     = noEff model { errorStr = Nothing }
+
+data NoteEvent = NotesRetrieved [Identifiable NoteContent]
+               | NoteChanged (Identifiable NoteContent)
+               | NoteCreated (Identifiable NoteContent)
+               | NoteDeleted String
+               | CreateNoteClicked
+               | NoteTitleEditionEnd String
+               | NoteBodyEditionEnd String
+               | DeleteNoteClicked String
+               deriving (Eq, Show)
+
+updateNote :: NoteEvent -> NoteData -> Effect (Either SystemEvent NoteEvent) NoteData
+updateNote event (NotDisplayingNotes notes) = updateNoteNotDisplaying event notes & Bifunctor.second NotDisplayingNotes
+updateNote event (DisplayingNotes displayedNotesState) = updateNoteDisplaying event displayedNotesState & Bifunctor.second DisplayingNotes
+
+updateNoteNotDisplaying :: NoteEvent -> [Identifiable NoteContent] -> Effect (Either SystemEvent NoteEvent) [Identifiable NoteContent]
+updateNoteNotDisplaying (NotesRetrieved notes) _ = noEff notes
+updateNoteNotDisplaying (NoteChanged newNote) notes = noEff (changeNote newNote notes)
+updateNoteNotDisplaying (NoteCreated note) oldNotes = noEff (oldNotes ++ [note])
+updateNoteNotDisplaying (NoteDeleted noteId) oldNotes = noEff (deleteIdentifiableFromId oldNotes noteId)
+updateNoteNotDisplaying event oldNotes = oldNotes <# (return . Left . ErrorHappened) ("Unable to handle event while not displaying notes.\n\t" ++ show event)
+
+updateNoteDisplaying :: NoteEvent ->  NotesDisplayedState -> Effect (Either SystemEvent NoteEvent) NotesDisplayedState
+updateNoteDisplaying (NotesRetrieved notes) (_, editionState) = noEff (notes, editionState)
+updateNoteDisplaying (NoteChanged newNote) (notes, editionState) = noEff (changeNote newNote notes, editionState)
+updateNoteDisplaying (NoteCreated note) (oldNotes, editionState) = noEff (oldNotes ++ [note], Just $ (note, EditingNoteBody))
+updateNoteDisplaying (NoteDeleted noteId) (oldNotes, editionState) = noEff (deleteIdentifiableFromId oldNotes noteId, editionState)
+updateNoteDisplaying CreateNoteClicked noteDisplayedState = noteDisplayedState <# callPostNote emptyNoteContent
+updateNoteDisplaying (NoteTitleEditionEnd newTitle) noteDisplayedState@(_, Just (originalNote, _)) = noteDisplayedState <# callPutNote originalNote { content = (content originalNote) { title = Just newTitle }}
+updateNoteDisplaying (NoteBodyEditionEnd newBody) noteDisplayedState@(_, Just (originalNote, _)) = noteDisplayedState <# callPutNote originalNote { content = (content originalNote) { noteContent = newBody } }
+updateNoteDisplaying (DeleteNoteClicked noteId) noteDisplayedState = noteDisplayedState <# callDeleteNote noteId
 
 -- ================================== Utils for UPDATE ==============================
 
 fromModalEvent :: Modal.Event -> AppEvent
 fromModalEvent = AppModalEvent
 
-fromSharadEvent :: SharadEventInstance -> AppEvent
-fromSharadEvent = SharadEvent
-
-handleNoteChanged :: Model -> Identifiable NoteContent -> Model
-handleNoteChanged model@Model { currentlyDisplayed = NoteType notes Nothing } newNote =
-  model { currentlyDisplayed = NoteType (changeNote newNote notes) Nothing }
-
-updateToEditingExistingNote :: Identifiable NoteContent -> DisplayMode -> DisplayMode
-updateToEditingExistingNote editedNote (NoteType notes Nothing) = NoteType notes (Just $ EditingExistingNote editedNote (content editedNote))
-
-updateEditedNoteTitle :: Model -> String -> Model
-updateEditedNoteTitle model@(Model { currentlyDisplayed = NoteType notes (Just (EditingNewNote editedContent)) }) newTitle =
-  model { currentlyDisplayed = NoteType notes (Just (EditingNewNote editedContent { title = Just newTitle }))}
-updateEditedNoteTitle model@Model { currentlyDisplayed = NoteType notes (Just (EditingExistingNote originalNote editedContent)) } newTitle =
-  model { currentlyDisplayed = NoteType (changeNote originalNote { content = (content originalNote) { title = Just newTitle }} notes) Nothing }
-updateEditedNoteTitle model _                                                         = model { errorStr = Just $ "Unable to update note title while display state is " ++ show (currentlyDisplayed model) }
-
-updateEditedNoteBody :: Model -> String -> Model
-updateEditedNoteBody model@(Model { currentlyDisplayed = NoteType notes (Just (EditingNewNote editedContent)) }) newContent =
-  model { currentlyDisplayed = NoteType notes (Just (EditingNewNote editedContent { noteContent = newContent }))}
-updateEditedNoteBody model@Model { currentlyDisplayed = NoteType notes (Just (EditingExistingNote originalNote editedContent)) } newContent =
-  model { currentlyDisplayed = NoteType (changeNote originalNote { content = (content originalNote) { noteContent = newContent }} notes) Nothing }
-updateEditedNoteBody model _                                                         = model { errorStr = Just $ "Unable to update note body while display state is " ++ show (currentlyDisplayed model) }
+fromSharadEvent :: NoteEvent -> AppEvent
+fromSharadEvent = NoteEventInstance
 
 changeNote :: Identifiable NoteContent -> [Identifiable NoteContent] -> [Identifiable NoteContent]
 changeNote newNote (item:otherItems) =
@@ -197,31 +184,31 @@ changeNote newNote (item:otherItems) =
     then newNote : otherItems
     else item    : changeNote newNote otherItems
 
-toEditingNewNote :: Model -> Model
-toEditingNewNote model@(Model { currentlyDisplayed = NoteType notes editionSt }) = model { currentlyDisplayed = NoteType notes (Just $ EditingNewNote emptyNoteContent) }
-toEditingNewNote model = model { errorStr = Just ("Cannot switch to editing new note while displaying state is " ++ show (currentlyDisplayed model)) }
-
 updateModalState :: Model -> Modal.State -> Model
 updateModalState model newModalState = model { editionModalState = newModalState }
 
-handleNoteEditionFinished :: Model -> Effect SharadEventInstance Model
-handleNoteEditionFinished model@Model { currentlyDisplayed = NoteType notes (Just (EditingNewNote newNoteContent)) } = model { currentlyDisplayed = NoteType notes Nothing, editionModalState = Modal.Hidden } <# callPostNote newNoteContent
-handleNoteEditionFinished model@Model { currentlyDisplayed = NoteType notes (Just (EditingExistingNote originalNote newNoteContent)) } = model { currentlyDisplayed = NoteType notes Nothing, editionModalState = Modal.Hidden } <# do
-  newStorageId <- callAndRetrieveBody $ putNoteRequest Identifiable { storageId = storageId originalNote, content = newNoteContent }
-  case newStorageId of
-    Just newStorageId -> return (NoteChanged Identifiable { storageId = newStorageId, content = newNoteContent })
-    Nothing           -> return (SharadSystemEvent $ ErrorHappened "No Body in POST /note response")
-
-handleCheckForNotes :: IO SharadEventInstance
+handleCheckForNotes :: IO (Either SystemEvent NoteEvent)
 handleCheckForNotes = do
   retrievedNotes <- callAndRetrieveBody getNotesRequest
-  return $ maybe (SharadSystemEvent $ ErrorHappened "No Body in GET /note response")
-                 NotesRetrieved
+  return $ maybe (Left $ ErrorHappened "No Body in GET /note response")
+                 (Right . NotesRetrieved)
                  retrievedNotes
 
 switchCurrentlyDisplayed :: Model -> Effect AppEvent Model
-switchCurrentlyDisplayed model@Model { currentlyDisplayed = NoteType notes _ } = noEff $ model { currentlyDisplayed = ChecklistType, notesData = notes, checklistsData = DisplayingChecklist (retrieveChecklists $ checklistsData model, Nothing) }
-switchCurrentlyDisplayed model@Model { currentlyDisplayed = ChecklistType } = noEff $ model { currentlyDisplayed = NoteType (notesData model) Nothing, checklistsData = NotDisplayingChecklist (retrieveChecklists $ checklistsData model) }
+switchCurrentlyDisplayed
+  model@Model { currentlyDisplayed = NoteType
+              , notesData = DisplayingNotes (oldNotes, _) } =
+  noEff $ model { currentlyDisplayed = ChecklistType
+                , notesData = NotDisplayingNotes oldNotes
+                , checklistsData = DisplayingChecklist (retrieveChecklists $ checklistsData model, Nothing)
+                }
+switchCurrentlyDisplayed
+  model@Model { currentlyDisplayed = ChecklistType
+              , notesData = NotDisplayingNotes notes } =
+  noEff $ model { currentlyDisplayed = NoteType
+                , notesData = DisplayingNotes (notes, Nothing)
+                , checklistsData = NotDisplayingChecklist (retrieveChecklists $ checklistsData model)
+                }
 
 -- =================================== CRUD =======================================================
 
@@ -273,12 +260,27 @@ putNoteRequest noteUpdate = Request { reqMethod = PUT
                                      , reqWithCredentials = False
                                      , reqData = asRequestBody noteUpdate
                                      }
-callPostNote :: NoteContent -> IO SharadEventInstance
+callPostNote :: NoteContent -> IO (Either SystemEvent NoteEvent)
 callPostNote newContent = do
   maybeStoreId <- callAndRetrieveBody (postNoteRequest newContent)
-  return $ maybe (SharadSystemEvent $ ErrorHappened "No Body in POST /note response")
-                 (\storeId -> NoteCreated Identifiable { storageId = storeId, content = newContent })
+  return $ maybe (Left $ ErrorHappened "No Body in POST /note response")
+                 (\storeId -> Right $ NoteCreated Identifiable { storageId = storeId, content = newContent })
                  maybeStoreId
+
+callPutNote :: Identifiable NoteContent -> IO (Either SystemEvent NoteEvent)
+callPutNote note = do
+  newStorageId <- callAndRetrieveBody $ putNoteRequest note
+  case newStorageId of
+    Just newStorageId -> (return . Right . NoteChanged) note { storageId = newStorageId }
+    Nothing           -> (return . Left . ErrorHappened) "No Body in POST /note response"
+
+callDeleteNote :: String -> IO (Either SystemEvent NoteEvent)
+callDeleteNote noteId = catch (do
+  response <- xhrByteString $ deleteNoteRequest noteId
+  if status response /= 200
+    then (return . Left . ErrorHappened) "Server answer != 200 OK"
+    else (return . Right . NoteDeleted) noteId)
+  (\(e :: SomeException) -> (return . Left . ErrorHappened) "NetworkError")
 
 asRequestBody :: ToJSON requestObj => requestObj -> RequestData
 asRequestBody = StringData . ms . toString . toStrict . encode
@@ -288,7 +290,6 @@ asRequestBody = StringData . ms . toString . toStrict . encode
 appView :: Model -> View AppEvent
 appView model = 
   main_ [ id_ "App", class_ "container" ]
-    (modalEditView model ++ 
     [ div_ [ class_ "row" ]
         [ header_ [ class_ "col pt-2" ]
             (listViewFromMaybe errorView (errorStr model) ++ [ createItemsButtonView (currentlyDisplayed model)
@@ -298,18 +299,12 @@ appView model =
         ]
     , div_ [ class_ "row" ]
         [ div_ [ class_ "col" ] [ ul_ [ class_ "list-group" ] contentView ] ]
-    ])
+    ]
   where
       contentView = case model of
-          Model { currentlyDisplayed = NoteType notes _ } -> map noteView notes
+          Model { currentlyDisplayed = NoteType, notesData = DisplayingNotes (notes, _) } -> map noteView notes
           Model { currentlyDisplayed = ChecklistType, checklistsData = DisplayingChecklist (checklists, Just (originalChecklist, checklistEditionState)) } -> map (\checklist -> if (id . storageId) checklist == (id . storageId) originalChecklist then checklistView (Just checklistEditionState) checklist else checklistView Nothing checklist) checklists
           Model { currentlyDisplayed = ChecklistType, checklistsData = NotDisplayingChecklist checklists } -> map (checklistView Nothing) checklists
-
-modalEditView :: Model -> [View AppEvent]
-modalEditView model = case currentlyDisplayed model of
-    NoteType _ (Just editionState@(EditingNewNote editedContent))             -> modalNoteEditView (title editedContent) (noteContent editedContent) editionState (editionModalState model)
-    NoteType _ (Just editionState@(EditingExistingNote _ editedContent))      -> modalNoteEditView (title editedContent) (noteContent editedContent) editionState (editionModalState model)
-    _ -> []
 
 navigationMenuView :: DisplayMode -> View AppEvent
 navigationMenuView currDisplayed =
@@ -321,20 +316,20 @@ navigationMenuView currDisplayed =
          ]
   where
      activePropertyForNotes = case currDisplayed of
-       NoteType _ _ -> "active"
+       NoteType -> "active"
        _ -> ""
      activePropertyForChecklists = case currDisplayed of
        ChecklistType -> "active"
        _ -> ""
      onClickChangeToNotes = case currDisplayed of
-       NoteType _ _ -> []
+       NoteType -> []
        _ -> [ onClick ChangeDisplayed ]
      onClickChangeToChecklists = case currDisplayed of
        ChecklistType -> []
        _ -> [ onClick ChangeDisplayed ]
 
 createItemsButtonView :: DisplayMode -> View AppEvent
-createItemsButtonView (NoteType _ _) = div_ [ class_ "row justify-content-end px-3" ] [ openNoteCreationModalButton ]
+createItemsButtonView NoteType = div_ [ class_ "row justify-content-end px-3" ] [ openNoteCreationModalButton ]
 createItemsButtonView ChecklistType = div_ [ class_ "row justify-content-end px-3" ] [ openChecklistCreationModalButton ]
 
 listViewFromMaybe :: (a -> View AppEvent) -> Maybe a -> [View AppEvent]
@@ -345,7 +340,7 @@ errorView errorStr =
   div_ [ class_ "row mx-1 justify-content-center" ] 
     [ div_ [ class_ "alert alert-danger w-100 text-center with-close-button", role_ "alert" ]
       [ text (ms errorStr)
-      , button_ [ type_ "button", class_ "close", onClick (SharadEvent ErrorDismissed)  ] [ span_ [] [ text "x" ] ]
+      , button_ [ type_ "button", class_ "close", onClick (SystemEventInstance ErrorDismissed)  ] [ span_ [] [ text "x" ] ]
       ]
     ]
   
@@ -354,7 +349,7 @@ role_ role = textProp "role" role
 
 openNoteCreationModalButton :: View AppEvent
 openNoteCreationModalButton = 
-  button_ [ class_ "btn btn-primary col-4", onClick (SharadEvent CreateNoteClicked) ] [ text "Create note" ]
+  button_ [ class_ "btn btn-primary col-4", onClick (NoteEventInstance CreateNoteClicked) ] [ text "Create note" ]
 
 openChecklistCreationModalButton :: View AppEvent
 openChecklistCreationModalButton  = 
@@ -367,7 +362,7 @@ noteView note =
       ([ h2_ [ class_ "h4" ] [ text _noteTitle ] ]
       ++ noteContentView _noteContent
       ++ [ div_ [ class_ "text-center" ]
-             [ button_ [ onClick (SharadEvent . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]]
+             [ button_ [ onClick (NoteEventInstance . DeleteNoteClicked $ (id . storageId) note), class_ "btn btn-sm btn-outline-danger" ] [ i_ [ class_ "bi bi-trash" ] [] ]]
       ])
     ]
   where
@@ -393,7 +388,7 @@ checklistView clEditionSt checklist =
 
     checklistTitleView :: View AppEvent
     checklistTitleView = case clEditionSt of
-      Just EditingTitle -> checklistTitleInputView _checklistName
+      Just EditingChecklistTitle -> checklistTitleInputView _checklistName
       _ -> div_ [ onDoubleClick (ChecklistEvent $ EditChecklistTitle checklist)] [ text $ ms  _checklistName ]
     
     checklistContentItemView :: Maybe ChecklistEditionState -> Identifiable ChecklistContent -> [ChecklistItem] -> View AppEvent
@@ -476,29 +471,12 @@ mapWithIndexMaybe f l = fst fold_
 mapWithIndex :: (Int -> a -> b) -> [a] -> [b]
 mapWithIndex f l = mapWithIndexMaybe (\i a -> Just (f i a)) l
  
-modalNoteEditView :: Maybe String -> String -> NoteEditionState -> Modal.State -> [View AppEvent]
-modalNoteEditView title content noteEditionState modalEditionState =
-  Modal.view "Création d'une note"
-            [ form_ [ class_ "row justify-content-center" ] 
-              [ div_ [ class_ "col" ] 
-                [ noteTitleInputView $ ms $ fromMaybe "" title
-                , noteContentInputView $ ms $ content
-                ]
-              ]
-            ]
-            [ div_ [ class_ "row justify-content-end" ]
-              [ button_ [ class_ "col-4 btn btn-secondary mx-2", onClick (SharadEvent NoteEditionAborted) ] [ text "Cancel" ]
-              , button_ [ class_ "col-4 btn btn-primary", onClick (SharadEvent NoteEditionFinidhed) ] [ text "Submit" ]
-              ]
-            ]
-            modalEditionState
-
 noteTitleInputView :: MisoString -> View AppEvent
 noteTitleInputView titleValue =
   div_ [ class_ "row form-group mb-3"]
     [ div_ [ class_ "col" ]
       [ label_ [ textProp "htmlFor" "inputTitle", class_ "form-label" ] [ text "Titre" ]
-      , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteTitle . fromMisoString), value_ titleValue ]
+      , input_ [ type_ "text", id_ "inputTitle", class_ "form-control", onBlur (NoteEventInstance . NoteTitleEditionEnd . fromMisoString), value_ titleValue ]
       ]
     ]
 
@@ -507,7 +485,7 @@ noteContentInputView contentValue =
   div_ [ class_ "row form-group mb-3"]
     [ div_ [ class_ "col" ]
       [ label_ [ textProp "htmlFor" "inputContent", class_ "form-label" ] [ text "Contenu" ]
-      , textarea_ [ id_ "inputContent", class_ "form-control", onChange (SharadEvent . UpdateCurrentlyEditedNoteBody . fromMisoString), value_ contentValue ] []
+      , textarea_ [ id_ "inputContent", class_ "form-control", onBlur (NoteEventInstance . NoteBodyEditionEnd . fromMisoString), value_ contentValue ] []
       ]
     ]
 
@@ -564,7 +542,7 @@ onBlur :: (MisoString -> action) -> Attribute action
 onBlur = on "blur" valueDecoder
 
 onEnterKeyHit :: (String -> AppEvent) -> Attribute AppEvent
-onEnterKeyHit toAction = on "keyup" onEnterInputDecoder (\maybeMisoStr -> maybe (SharadEvent $ SharadSystemEvent NoEffect) (toAction . fromMisoString) maybeMisoStr)
+onEnterKeyHit toAction = on "keyup" onEnterInputDecoder (\maybeMisoStr -> maybe (SystemEventInstance NoEffect) (toAction . fromMisoString) maybeMisoStr)
 
 onEnterInputDecoder :: Decoder (Maybe MisoString)
 onEnterInputDecoder = Decoder { decodeAt = DecodeTargets [["target"], []]
@@ -586,7 +564,7 @@ data ChecklistData = NotDisplayingChecklist [Identifiable ChecklistContent]
 
 type ChecklistDisplayedState = ([Identifiable ChecklistContent], Maybe (Identifiable ChecklistContent, ChecklistEditionState))
 
-data ChecklistEditionState = EditingTitle
+data ChecklistEditionState = EditingChecklistTitle
                            | EditingItems ChecklistItemsEditionState
                            deriving (Eq, Show)
 
@@ -615,7 +593,7 @@ data ChecklistEventInstance = UpdateCurrentlyEditedChecklistTitle String
                             | AddItemToChecklist (Identifiable ChecklistContent)
                             | TransitionCheckboxDisappearingEnd
                             | CreateChecklistClicked
-                            deriving (Show)
+                            deriving (Eq, Show)
 
 emptyChecklistContent :: ChecklistContent
 emptyChecklistContent = ChecklistContent { name = "", items = [] }
@@ -695,8 +673,8 @@ updateChecklistNotDisplaying event checklists = checklists <# (return $ Left (Er
 updateChecklistDisplaying :: ChecklistEventInstance -> ChecklistDisplayedState -> Effect (Either SystemEvent ChecklistEventInstance) ChecklistDisplayedState
 updateChecklistDisplaying (RetrivedChecklists checklists) (_, maybeEditionState) = noEff (checklists, maybeEditionState)
 updateChecklistDisplaying CreateChecklistClicked (checklists, _) = (checklists, Nothing) <# callPostChecklist emptyChecklistContent { name = "New Checklist"}
-updateChecklistDisplaying (ChecklistCreated checklist) (oldChecklists, _) = (oldChecklists ++ [checklist], Just (checklist, EditingTitle)) <# (return $ Left $ ScrollAndFocus "checklist-title-input")
-updateChecklistDisplaying (EditChecklistTitle originalChecklist) (oldChecklists, _) = noEff (oldChecklists, Just (originalChecklist, EditingTitle))
+updateChecklistDisplaying (ChecklistCreated checklist) (oldChecklists, _) = (oldChecklists ++ [checklist], Just (checklist, EditingChecklistTitle)) <# (return $ Left $ ScrollAndFocus "checklist-title-input")
+updateChecklistDisplaying (EditChecklistTitle originalChecklist) (oldChecklists, _) = noEff (oldChecklists, Just (originalChecklist, EditingChecklistTitle))
 updateChecklistDisplaying (UpdateCurrentlyEditedChecklistTitle newTitle) model = handleTitleModificationEnd newTitle model
 updateChecklistDisplaying (EditItemLabel checklist idx) (oldChecklists, _) = noEff (oldChecklists, Just (checklist, EditingItems $ EditingLabel idx))
 updateChecklistDisplaying (ChecklistEditItemLabelChanged newLabel) model   = updateItemLabel model newLabel 

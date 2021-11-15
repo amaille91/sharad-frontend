@@ -20,6 +20,7 @@ data Event =
     ShowingTriggered
   | Shown
   | Dismissed
+  deriving (Eq, Show)
 
 data State = Hidden | Transitioning | Hiding | Visible deriving (Eq, Show)
 
