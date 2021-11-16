@@ -24,6 +24,7 @@ library
   exposed-modules: SharadFrontend
   other-modules: 
     SharadFrontend.System
+    SharadFrontend.Note
     SharadFrontend.Checklist
     SharadFrontend.Utils
   hs-source-dirs: ./src/

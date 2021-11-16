@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit) where
+module SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit, deleteIdentifiableFromId) where
+
+import Prelude hiding (id)
 
 import Data.ByteString.Internal (ByteString)
 import Data.ByteString.Lazy (fromStrict, toStrict)
@@ -10,6 +12,7 @@ import Data.Vector ((!))
 import qualified Data.Aeson as Aeson (FromJSON, ToJSON, withObject, withArray, decode, encode)
 import Data.Aeson ((.:))
 
+import Model
 import SharadFrontend.System
 
 import Miso.String (ms, fromMisoString, MisoString)
@@ -59,4 +62,11 @@ onEnterInputDecoder = Decoder { decodeAt = DecodeTargets [["target"], []]
                                    if keyCode == enterKeyCode then return $ Just value else return Nothing)
                                }
                                where enterKeyCode = 13 
+
+deleteIdentifiableFromId :: Content a => [Identifiable a] -> String -> [Identifiable a]
+deleteIdentifiableFromId [] noteId = [] -- TODO propagate error not finding item to delete
+deleteIdentifiableFromId (currentItem@Identifiable { storageId = StorageId { id = currentId }}:rest) itemId =
+  if currentId == itemId
+    then rest
+    else currentItem : deleteIdentifiableFromId rest itemId
 

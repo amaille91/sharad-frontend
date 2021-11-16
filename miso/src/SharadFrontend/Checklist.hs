@@ -8,7 +8,7 @@ import Data.List (find)
 
 import Model
 import SharadFrontend.System
-import SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody,  onBlur, onEnterKeyHit)
+import SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody,  onBlur, onEnterKeyHit, deleteIdentifiableFromId)
 
 import Miso.String (ms, MisoString, fromMisoString)
 import Miso.Effect (Effect(..), noEff, (<#))
@@ -201,13 +201,6 @@ addItemToChecklist checklist checklists = changeChecklist (checklist { content =
   where
     newContent = (content checklist) { items = newItems }
     newItems = (items $ content checklist) ++ [emptyChecklistItem]
-
-deleteIdentifiableFromId :: Content a => [Identifiable a] -> String -> [Identifiable a]
-deleteIdentifiableFromId [] noteId = [] -- TODO propagate error not finding item to delete
-deleteIdentifiableFromId (currentItem@Identifiable { storageId = StorageId { id = currentId }}:rest) itemId =
-  if currentId == itemId
-    then rest
-    else currentItem : deleteIdentifiableFromId rest itemId
 
 updateItemLabel :: ChecklistDisplayedState -> String -> Effect (Either SystemEvent ChecklistEventInstance) ChecklistDisplayedState 
 updateItemLabel (checklists, Just (originalChecklist, EditingItems (EditingLabel idx))) newLabel = (checklists, Nothing) <# callPutChecklist newChecklist
