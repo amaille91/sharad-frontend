@@ -22,7 +22,8 @@ library
     buildable: False
 
   exposed-modules: SharadFrontend
-  other-modules: SharadFrontend.Modal
+  other-modules: 
+      SharadFrontend.System
   hs-source-dirs: ./src/
   build-depends:       
     base >=4.12 && <4.13,
@@ -45,6 +46,7 @@ executable sharad-frontend
   main-is:             Main.hs
   -- other-modules:
   -- other-extensions:
+  ghc-options: -Wall -Wincomplete-patterns
   build-depends:       
     base >=4.12 && <4.13,
     sharad-frontend

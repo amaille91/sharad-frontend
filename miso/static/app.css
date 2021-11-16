@@ -184,3 +184,7 @@ nav.d-flex {
   from {opacity: 1;}
   to {opacity: 0;}
 }
+
+.content-display-view > p {
+  margin: 0;
+}
