@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit, deleteIdentifiableFromId) where
+module SharadFrontend.Utils (CallError(..), callAndRetrieveBody, callWithoutBody, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit, deleteIdentifiableFromId, toSystemError, onAnimationEnd) where
 
 import Prelude hiding (id)
 
@@ -8,8 +8,12 @@ import Data.ByteString.Internal (ByteString)
 import Data.ByteString.Lazy (fromStrict, toStrict)
 import Data.ByteString.UTF8 (toString)
 import Data.Vector ((!))
+import Data.Either.Combinators (mapLeft)
+import Control.Exception (SomeException)
+import Control.Monad.Trans.Maybe (MaybeT(..))
+import Control.Monad.Trans.Either (EitherT, runEitherT, left, right, newEitherT, handleEitherT, hoistMaybe)
 
-import qualified Data.Aeson as Aeson (FromJSON, ToJSON, withObject, withArray, decode, encode)
+import qualified Data.Aeson as Aeson (FromJSON, ToJSON, withObject, withArray, eitherDecode', encode)
 import Data.Aeson ((.:))
 
 import Model
@@ -17,20 +21,43 @@ import SharadFrontend.System
 
 import Miso.String (ms, fromMisoString, MisoString)
 import Miso.Html (Attribute, on)
-import Miso.Event.Decoder (Decoder(..), DecodeTarget(..), valueDecoder, keycodeDecoder)
+import Miso.Event.Decoder (Decoder(..), DecodeTarget(..), emptyDecoder, valueDecoder, keycodeDecoder)
 import Miso.Event.Types (KeyCode(..))
 
-import JavaScript.Web.XMLHttpRequest (xhrByteString, Request(..), RequestData(..), contents)
+import JavaScript.Web.XMLHttpRequest (xhrByteString, Request(..), RequestData(..), Response(..), contents)
 
-callAndRetrieveBody :: Aeson.FromJSON a => Request -> IO (Maybe a)
+toSystemError :: CallError -> SystemEvent
+toSystemError (NetworkError e) = ErrorHappened (show e)
+toSystemError EmptyBody = ErrorHappened "Unexpected empty body in server's response"
+toSystemError BadResponseCode = ErrorHappened "Unexpected error code in server's response"
+toSystemError (BodyDecodingError s) = ErrorHappened ("Error while deserializing the body's response: " ++ s)
+
+callAndRetrieveBody :: Aeson.FromJSON a => Request -> EitherT CallError IO a
 callAndRetrieveBody req = do 
-  maybeBS <- fmap contents $ xhrByteString req
-  case maybeBS of
-    Nothing -> return Nothing
-    Just bs -> return $ decode bs
+  resp <- call req
+  body <- hoistMaybe EmptyBody (contents resp)
+  newEitherT $ return $ mapLeft BodyDecodingError (eitherDecode' body)
 
-decode :: Aeson.FromJSON fromJson => ByteString -> Maybe fromJson
-decode = Aeson.decode . fromStrict
+callWithoutBody :: Request -> MaybeT IO CallError
+callWithoutBody req = leftToMaybeT (call req)
+
+leftToMaybeT :: EitherT e IO a -> MaybeT IO e
+leftToMaybeT e = MaybeT (do
+  res <- runEitherT e
+  return $ either Just (const Nothing) res)
+
+call :: Request -> EitherT CallError IO (Response ByteString)
+call req = do
+  resp <- handleEitherT NetworkError (xhrByteString req)
+  if status resp /= 200 then left BadResponseCode else right resp
+
+data CallError = NetworkError SomeException
+               | EmptyBody
+               | BadResponseCode
+               | BodyDecodingError String
+
+eitherDecode' :: Aeson.FromJSON fromJSON => ByteString -> Either String fromJSON
+eitherDecode' = Aeson.eitherDecode' . fromStrict
 
 mapWithIndexMaybe :: (Int -> a -> Maybe b) -> [a] -> [b]
 mapWithIndexMaybe f l = fst fold_
@@ -69,4 +96,7 @@ deleteIdentifiableFromId (currentItem@Identifiable { storageId = StorageId { id 
   if currentId == itemId
     then rest
     else currentItem : deleteIdentifiableFromId rest itemId
+
+onAnimationEnd :: action -> Attribute action
+onAnimationEnd action = on "animationend" emptyDecoder (\() -> action)
 

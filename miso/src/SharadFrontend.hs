@@ -13,6 +13,7 @@ import Data.String (lines)
 import Data.ByteString.Lazy (toStrict)
 import Data.Map.Strict (singleton)
 import qualified Data.Bifunctor as Bifunctor (first, bimap)
+import Control.Monad.Trans.Either (EitherT, runEitherT, bimapEitherT)
 import Control.Monad.State.Strict (StateT, mapStateT)
 import Data.Aeson (Array(..), (.:))
 
@@ -28,7 +29,8 @@ import Language.Javascript.JSaddle.Object (jsg1)
 import Language.Javascript.JSaddle.Types (JSM)
 
 
-import SharadFrontend.Utils (callAndRetrieveBody, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit)
+import SharadFrontend.Utils (callAndRetrieveBody, toSystemError, mapWithIndexMaybe, mapWithIndex, asRequestBody, onBlur, onEnterKeyHit)
+import SharadFrontend.Crud (callGet)
 import SharadFrontend.System
 import SharadFrontend.Note
 import SharadFrontend.Checklist
@@ -82,36 +84,30 @@ updateApp :: AppEvent -> Model -> Effect AppEvent Model
 updateApp (SystemEventInstance event) model = Bifunctor.bimap SystemEventInstance
                                                               (\newErrorStr -> model { errorStr = newErrorStr })
                                                               (updateSystem event (errorStr model))
-updateApp CheckForContent model = Effect model (map toSubscription [either SystemEventInstance NoteEventInstance <$> handleCheckForNotes, either SystemEventInstance (ChecklistEvent) <$> handleCheckForChecklists])
+updateApp CheckForContent model = Effect model (map toSubscription [fromEitherT SystemEventInstance NoteEventInstance handleCheckForNotes, fromEitherT SystemEventInstance (ChecklistEvent) handleCheckForChecklists])
 updateApp ChangeDisplayed model = switchCurrentlyDisplayed model
-updateApp (ChecklistEvent event) model = updateChecklist event model
+updateApp (ChecklistEvent event) model = Bifunctor.bimap (either SystemEventInstance ChecklistEvent)
+                                                         (\clData -> model { checklistsData = clData })
+                                                         (updateChecklist event $ checklistsData model)
 updateApp (NoteEventInstance event) model@(Model { notesData = notesData_ }) = Bifunctor.bimap (either SystemEventInstance NoteEventInstance)
-                                                                                               (\newNotesData -> model { notesData = newNotesData })
-                                                                                               (updateNote event notesData_)
+                                                                                       (\newNotesData -> model { notesData = newNotesData })
+                                                                                       (updateNote event notesData_)
+
+fromEitherT :: Monad m => (e -> b) -> (a -> b) -> EitherT e m a -> m b
+fromEitherT fromLeft fromRight = (fmap $ either fromLeft fromRight) . runEitherT
+
 toSubscription :: IO a -> Sub a
 toSubscription io = (\sink -> do
     res <- io
     sink res)
 
-updateChecklist :: ChecklistEventInstance -> Model -> Effect AppEvent Model
-updateChecklist event model = case checklistsData model of
-  NotDisplayingChecklist checklists -> case updateChecklistNotDisplaying event checklists of
-    Effect newChecklists subs -> Effect model { checklistsData = NotDisplayingChecklist newChecklists } (mapSub toSharadEvent <$> subs)
-  DisplayingChecklist checklistDisplayedState -> case updateChecklistDisplaying event checklistDisplayedState of
-    Effect m subs -> Effect model { checklistsData = DisplayingChecklist m } (mapSub toSharadEvent <$> subs)
-  where
-    toSharadEvent = either SystemEventInstance
-                           (ChecklistEvent)
-
-
 -- ================================== Utils for UPDATE ==============================
 
-handleCheckForNotes :: IO (Either SystemEvent NoteEvent)
-handleCheckForNotes = do
-  retrievedNotes <- callAndRetrieveBody getNotesRequest
-  return $ maybe (Left $ ErrorHappened "No Body in GET /note response")
-                 (Right . NotesRetrieved)
-                 retrievedNotes
+handleCheckForNotes :: EitherT SystemEvent IO NoteEvent
+handleCheckForNotes =
+  bimapEitherT toSystemError
+               NotesRetrieved
+               (callGet NoteToken)
 
 switchCurrentlyDisplayed :: Model -> Effect AppEvent Model
 switchCurrentlyDisplayed
@@ -202,4 +198,11 @@ openNoteCreationModalButton =
 openChecklistCreationModalButton :: View AppEvent
 openChecklistCreationModalButton  = 
   button_ [ class_ "btn btn-primary col-4", onClick (ChecklistEvent CreateChecklistClicked) ] [ text "Create checklist" ]
+
+handleCheckForChecklists :: EitherT SystemEvent IO ChecklistEventInstance
+handleCheckForChecklists = bimapEitherT toSystemError RetrivedChecklists (callGet ChecklistToken)
+
+retrieveChecklists :: ChecklistData -> [Identifiable ChecklistContent]
+retrieveChecklists (NotDisplayingChecklist cls) = cls
+retrieveChecklists (DisplayingChecklist (cls, _)) = cls
 
