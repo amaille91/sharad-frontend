@@ -115,7 +115,7 @@ updateChecklistDisplaying CreateChecklistClicked (checklists, _) = (checklists, 
 updateChecklistDisplaying (ChecklistCreated checklist) (oldChecklists, _) = (oldChecklists ++ [checklist], Just (checklist, EditingChecklistTitle)) <# (return $ Left $ ScrollAndFocus "checklist-title-input")
 updateChecklistDisplaying (EditChecklistTitle originalChecklist) (oldChecklists, _) = noEff (oldChecklists, Just (originalChecklist, EditingChecklistTitle))
 updateChecklistDisplaying (UpdateCurrentlyEditedChecklistTitle newTitle) model = handleTitleModificationEnd newTitle model
-updateChecklistDisplaying (EditItemLabel checklist idx) (oldChecklists, _) = noEff (oldChecklists, Just (checklist, EditingItems $ EditingLabel idx))
+updateChecklistDisplaying (EditItemLabel checklist idx) (oldChecklists, _) = (oldChecklists, Just (checklist, EditingItems $ EditingLabel idx)) <# (return $ Left$ ScrollAndFocus "checklist-item-input")
 updateChecklistDisplaying (ChecklistEditItemLabelChanged newLabel) model   = updateItemLabel model newLabel 
 updateChecklistDisplaying (CheckingItem originalChecklist itemIdx) (oldChecklists, _) =
   let newChecklists = modifyChecklistItemCheck originalChecklist itemIdx True oldChecklists
@@ -249,14 +249,14 @@ checklistItemView maybeChecklistEditionState originalChecklist (item, idx) =
 
 displayLabelView :: String -> Identifiable ChecklistContent -> Maybe CheckItemTransition -> (ChecklistItem, Int) -> [View ChecklistEventInstance]
 displayLabelView checkboxId originalChecklist maybeTransition (item, idx) =
-  [ label_ [ for_ (ms checkboxId), class_ "col-11 mb-0", onDoubleClick (EditItemLabel originalChecklist idx)]
-      [ div_ [ class_ "row align-items-center" ]
-        [ input_ [ type_ "checkbox", class_ "checklist-item-checkbox", id_ (ms checkboxId), checked_ (checked item), onChecked (\(Checked bool) -> if bool then CheckingItem originalChecklist idx else UncheckingItem originalChecklist idx)]
-        , svgCheckboxView maybeTransition (checked item)
-        , span_ [ class_ "pl-2" ] [ text $ ms (label item) ]
-        ]
+  [ div_ [ class_ "col-1 align-items-center p-0 max-width-svg" ]
+    [ label_ [ for_ (ms checkboxId), class_ "mb-0 toto" ]
+      [ input_ [ type_ "checkbox", class_ "checklist-item-checkbox", id_ (ms checkboxId), checked_ (checked item), onChecked (\(Checked bool) -> if bool then CheckingItem originalChecklist idx else UncheckingItem originalChecklist idx)]
+      , svgCheckboxView maybeTransition (checked item)
       ]
-  , button_ [ class_ "col-1 close", onClick (DeleteChecklistItem originalChecklist idx) ] [ text "x" ]
+    ]
+    , span_ [ class_ "pl-2 label-toto", onClick (EditItemLabel originalChecklist idx) ] [ text $ ms (label item) ]
+    , button_ [ class_ "col-1 close ml-auto", onClick (DeleteChecklistItem originalChecklist idx) ] [ text "x" ]
   ]
 
 editLabelView :: Maybe CheckItemTransition -> ChecklistItem -> [View (Either SystemEvent ChecklistEventInstance)]

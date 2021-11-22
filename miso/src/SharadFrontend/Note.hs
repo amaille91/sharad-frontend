@@ -112,11 +112,15 @@ noteView noteEditionState note =
     _noteContent = noteContent (content note)
     _noteTitle = (fromMaybe "" . title . content) note
 
-    noteTitleView (Just (originalNote, EditingNoteTitle)) = noteTitleInputView _noteTitle
-    noteTitleView _ = div_ [ class_ "col", onDoubleClick (Right $ EditNoteTitle note) ] [ text $ ms _noteTitle ]
+    noteTitleView (Just (originalNote, EditingNoteTitle))
+      | (id . storageId) originalNote == (id . storageId) note = noteTitleInputView _noteTitle
+      | otherwise = div_ [ class_ "col", onClick (Right $ EditNoteTitle note) ] [ text $ ms _noteTitle ]
+    noteTitleView _ = div_ [ class_ "col", onClick (Right $ EditNoteTitle note) ] [ text $ ms _noteTitle ]
 
     noteContentView :: NoteEditingState -> View (Either SystemEvent NoteEvent)
-    noteContentView (Just (originalNote, EditingNoteBody)) = Right <$> noteContentInputView _noteContent
+    noteContentView (Just (originalNote, EditingNoteBody))
+      | (id . storageId) originalNote == (id . storageId) note = Right <$> noteContentInputView _noteContent
+      | otherwise = Right <$> noteContentDisplayView _noteContent note
     noteContentView _ = Right <$> noteContentDisplayView _noteContent note
 
 noteTitleInputView :: String -> View (Either SystemEvent NoteEvent)
@@ -126,7 +130,7 @@ noteTitleInputView titleValue =
 
 noteContentDisplayView :: String -> Identifiable NoteContent -> View NoteEvent
 noteContentDisplayView noteContentStr originalNote = 
-  div_ [ class_ "col content-display-view", onDoubleClick (EditNoteBody originalNote) ] (map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr))
+  div_ [ class_ "col content-display-view", onClick (EditNoteBody originalNote) ] (map (\t -> p_ [] [ text $ ms t ]) (lines noteContentStr))
 
 noteContentInputView :: String -> View NoteEvent
 noteContentInputView contentValue =

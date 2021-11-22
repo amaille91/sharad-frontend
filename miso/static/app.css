@@ -188,3 +188,7 @@ nav.d-flex {
 .content-display-view > p {
   margin: 0;
 }
+
+.max-width-svg {
+  max-width: 16px;
+}
